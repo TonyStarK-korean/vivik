@@ -64,14 +64,6 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# 🔧 SSL 검증 완전 비활성화 (인증서 없음 문제 해결)
-import ssl
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# SSL 컨텍스트 생성 (검증 비활성화)
-ssl._create_default_https_context = ssl._create_unverified_context
-
 # 🔧 스크립트 디렉토리를 Python 경로에 추가 (import 문제 해결)
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
@@ -345,30 +337,18 @@ class OneMinuteSurgeEntryStrategy:
         
         while retry_count < max_retries:
             try:
-                # 🌐 프록시 설정 (필요시 활성화)
-                proxy_config = None
-                # 프록시 사용하려면 아래 주석 해제하고 프록시 주소 입력
-                # proxy_config = {
-                #     'http': 'http://프록시주소:포트',
-                #     'https': 'http://프록시주소:포트'
-                # }
-
                 self.exchange = ccxt.binance({
                     'apiKey': api_key if api_key else None,
                     'secret': secret_key if secret_key else None,
                     'sandbox': sandbox,
                     'enableRateLimit': True,
                     'rateLimit': 50,  # 300 → 50 (속도 개선, 6배 빨라짐)
-                    'timeout': 15000,  # 🔧 API 타임아웃 15초로 증가 (네트워크 안정성)
-                    'proxies': proxy_config,  # 🌐 프록시 설정
+                    'timeout': 3000,  # ⚡ API 타임아웃 3초 (빠른 실패)
                     'options': {
                         'defaultType': 'future',
                         'adjustForTimeDifference': True,
-                        'recvWindow': 60000,  # 60초 타임윈도우 (기본 10초 → 60초로 증가)
-                        'fetchCurrencies': False  # 🔧 currencies 조회 비활성화 (인증 불필요)
-                    },
-                    # 🔧 SSL 검증 우회 (임시 해결책 - 테스트용)
-                    'verify': False
+                        'recvWindow': 60000  # 60초 타임윈도우 (기본 10초 → 60초로 증가)
+                    }
                 })
 
                 # ⚡ 연결 풀 크기 최적화: 병렬 처리 100개 워커 대응
@@ -381,8 +361,6 @@ class OneMinuteSurgeEntryStrategy:
                     )
                     self.exchange.session.mount('https://', adapter)
                     self.exchange.session.mount('http://', adapter)
-                    # 🔧 SSL 검증 우회 (requests 세션에도 적용)
-                    self.exchange.session.verify = False
                 except Exception as e:
                     self.logger.warning(f"연결 풀 설정 실패 (무시 가능): {e}")
 
@@ -405,54 +383,37 @@ class OneMinuteSurgeEntryStrategy:
             except Exception as e:
                 retry_count += 1
                 error_str = str(e)
-                error_type = type(e).__name__
-
-                # 디버깅: 에러 내용 확인
-                print(f"[DEBUG] Error type: {error_type}, Error: {error_str[:200]}")
-
-                # Rate limit, IP 밴 또는 SSL/Network 연결 문제 감지
-                if ("418" in error_str or "429" in error_str or "banned" in error_str.lower() or
-                    "Too many requests" in error_str or "SSLError" in error_str or "ssl" in error_str.lower() or
-                    "NetworkError" in error_type or "ConnectionError" in error_type):
+                
+                # Rate limit 또는 IP 밴 감지
+                if ("418" in error_str or "429" in error_str or "banned" in error_str.lower() or 
+                    "Too many requests" in error_str):
                     
-                    if "ssl" in error_str.lower():
-                        self.logger.warning(f"🚨 SSL 연결 문제 감지 - WebSocket 전용 모드로 시작")
-                        print("🔄 SSL 연결 문제를 우회하여 WebSocket 전용 모드로 실행합니다")
-                    else:
-                        self.logger.warning(f"🚨 API Rate Limit/IP 밴 감지 - WebSocket 전용 모드로 시작")
-
-                        # 밴 해제 시간 표시
-                        if "banned until" in error_str:
-                            import re
-                            ban_time_match = re.search(r'banned until (\d+)', error_str)
-                            if ban_time_match:
-                                ban_timestamp = int(ban_time_match.group(1))
-                                if ban_timestamp > 10**12:  # 밀리초 형태
-                                    ban_timestamp = ban_timestamp // 1000
-                                import datetime
-                                ban_time = datetime.datetime.fromtimestamp(ban_timestamp)
-                                print(f"🚨 IP 밴 해제 예정: {ban_time}")
-
+                    self.logger.warning(f"🚨 API Rate Limit/IP 밴 감지 - WebSocket 전용 모드로 시작")
+                    
+                    # 밴 해제 시간 표시
+                    if "banned until" in error_str:
+                        import re
+                        ban_time_match = re.search(r'banned until (\d+)', error_str)
+                        if ban_time_match:
+                            ban_timestamp = int(ban_time_match.group(1))
+                            if ban_timestamp > 10**12:  # 밀리초 형태
+                                ban_timestamp = ban_timestamp // 1000
+                            import datetime
+                            ban_time = datetime.datetime.fromtimestamp(ban_timestamp)
+                            print(f"🚨 IP 밴 해제 예정: {ban_time}")
+                    
                     # Rate limit 상태로 설정하고 WebSocket 전용 모드로 계속 진행
                     self._api_rate_limited = True
-
-                    # 최소한의 거래소 설정만 유지 (load_markets 호출 안함)
-                    self.exchange = ccxt.binance({
-                        'apiKey': api_key if api_key else None,
-                        'secret': secret_key if secret_key else None,
-                        'sandbox': sandbox,
-                        'enableRateLimit': True,
-                        'timeout': 15000,
-                        'options': {
-                            'defaultType': 'future',
-                            'fetchCurrencies': False  # 🔧 currencies 조회 비활성화
-                        },
-                        # 🔧 SSL 검증 우회 (임시 해결책 - 테스트용)
-                        'verify': False
-                    })
-                    # 심볼 목록은 나중에 하드코딩으로 설정
-                    self.logger.info("⚠️ WebSocket 전용 모드 - load_markets 스킵")
-                    break  # WebSocket 모드로 계속 진행
+                    print("🔄 WebSocket 전용 모드로 계속 진행합니다 (REST API 차단)")
+                    
+                    # 최소한의 거래소 설정만 유지
+                    try:
+                        self.exchange = ccxt.binance(config)
+                        # 심볼 목록만 하드코딩으로 설정
+                        self.logger.info("⚠️ WebSocket 전용 모드 - 제한된 기능으로 시작")
+                        break  # WebSocket 모드로 계속 진행
+                    except:
+                        pass
                 else:
                     self.logger.error(f"거래소 초기화 실패: {e}")
                     if retry_count >= max_retries:
