@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+
+# 데이터 파일
+*.log
+data/
+*.db
+sent_notifications.json
+dca_positions.json
+dca_positions_backup*.json
+daily_stats.json
+half_profit_exit_config.json
+dca_config.json
+dca_limits.json
+webhook_config.json
+
+# 디버그 폴더
+strategy_debug/
+
+# 압축 파일
+*.zip
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
