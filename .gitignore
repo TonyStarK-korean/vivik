@@ -4,27 +4,11 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
+
+# Virtual Environment
 venv/
-
-# 데이터 파일
-*.log
-data/
-*.db
-sent_notifications.json
-dca_positions.json
-dca_positions_backup*.json
-daily_stats.json
-half_profit_exit_config.json
-dca_config.json
-dca_limits.json
-webhook_config.json
-
-# 디버그 폴더
-strategy_debug/
-
-# 압축 파일
-*.zip
+env/
+ENV/
 
 # IDE
 .vscode/
@@ -36,5 +20,49 @@ strategy_debug/
 .DS_Store
 Thumbs.db
 
-# Claude
-.claude/
+# Backup files
+*_backup.py
+*_before_optimization.py
+*_old.py
+
+# Test & Debug files
+test_*.py
+debug_*.py
+diagnose_*.py
+check_*.py
+analyze_*.py
+fix_*.py
+temp_*.py
+final_verification_test.py
+
+# Data files
+*.csv
+*.json
+*.db
+*.sqlite
+
+# Logs
+logs/
+*.log
+websocket_test.log
+
+# Temporary files
+tmp/
+temp/
+
+# Documentation (선택적)
+# *.md 주석 처리 - 필요한 문서는 포함
+
+# ===== 민감 정보 (절대 업로드 금지!) =====
+binance_config.py
+telegram_config.py
+
+# API 키가 포함된 파일
+*_config.py
+!*_config.example.py
+
+# 개인 데이터
+*.key
+*.pem
+*.env
+.env.*

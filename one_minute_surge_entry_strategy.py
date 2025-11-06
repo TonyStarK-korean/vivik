@@ -3614,10 +3614,398 @@ class OneMinuteSurgeEntryStrategy:
                     self.logger.debug(f"🔄 [FALLBACK] {clean_symbol}: 기본 WATCHLIST로 분류")
             
             return results if results else None
-                    
+
         except Exception as e:
             self.logger.error(f"{symbol} 분석 실패: {e}")
             return None
+
+    def _print_entry_signals(self, entry_signals):
+        """ENTRY 신호 출력 함수 (거래 실행 제외)"""
+        if not entry_signals:
+            print(f"\n[SIGNAL] 진입신호 [전략C: 3분봉 시세 초입 포착]")
+            print("   없음")
+            print(f"\n[SIGNAL] 진입신호 [전략D: 5분봉 초입 초강력 타점]")
+            print("   없음")
+            return
+
+        # 전략별로 그룹핑
+        strategy_groups = {}
+        for result in entry_signals:
+            strategy_type = result.get('strategy_type', '전략C: 3분봉 시세 초입 포착')
+            if strategy_type not in strategy_groups:
+                strategy_groups[strategy_type] = []
+            strategy_groups[strategy_type].append(result)
+
+        # 전략별로 출력 (C+D → C → D 순서)
+        strategy_order = ['전략C+D: 3분봉+5분봉 복합 진입', '전략C: 3분봉 시세 초입 포착', '전략D: 5분봉 초입 초강력 타점']
+        for strategy in strategy_order:
+            if strategy not in strategy_groups:
+                continue
+            signals = strategy_groups[strategy]
+            print(f"\n[SIGNAL] 진입신호 [{strategy}]")
+            for result in signals:
+                clean_symbol = result['symbol'].replace('/USDT:USDT', '').replace('/USDT', '')
+                # 충족된 조건들 가져오기
+                satisfied_conditions = result.get('conditions_summary', ['전체조건충족'])
+                conditions_text = " | ".join(satisfied_conditions) if satisfied_conditions else "전체조건충족"
+
+                # 이미 계산된 24시간 변동률 사용 (API 호출 방지)
+                try:
+                    change_pct = result.get('change_24h', 0)
+                    # 문자열을 숫자로 안전하게 변환
+                    try:
+                        change_pct = float(change_pct) if change_pct != 0 else 0.0
+                    except (ValueError, TypeError):
+                        change_pct = 0.0
+
+                    # 🔥 진입신호 - 심볼명 초록색, 이모지 빨간색
+                    print(f"\033[91m🔥\033[0m \033[92m\033[1m{clean_symbol}\033[0m [24h:{change_pct:+.1f}%]")
+                    print(f"      🎯 충족조건: {conditions_text}")
+                except Exception as e:
+                    # 변동률 계산 실패시에도 기본 정보는 출력
+                    change_pct = result.get('change_24h', 0)
+                    try:
+                        change_pct = float(change_pct) if change_pct != 0 else 0.0
+                    except:
+                        change_pct = 0.0
+                    print(f"   \033[92m\033[1m{clean_symbol}\033[0m [24h:{change_pct:+.1f}%]")
+                    print(f"      🎯 충족조건: {conditions_text}")
+                    print(f"      ⚠️ 변동률 조회 오류: {e}")
+
+    def _print_near_entry_signals(self, near_entry):
+        """NEAR_ENTRY 신호 출력 함수"""
+        # 심볼별로 NEAR 결과 그룹핑 (동일 심볼에 대해 두 전략 결과 모두 표시)
+        near_by_symbol = {}
+        for result in near_entry:
+            symbol = result['symbol']
+            if symbol not in near_by_symbol:
+                near_by_symbol[symbol] = {}
+            strategy_type = result.get('strategy_type', '전략C: 3분봉 시세 초입 포착')
+            near_by_symbol[symbol][strategy_type] = result
+
+        # 전략별로 NEAR 출력 (전략별 그룹화)
+        if near_by_symbol:
+            # 전략별로 그룹핑
+            near_groups = {}
+            for symbol, strategies in near_by_symbol.items():
+                for strategy_type, result in strategies.items():
+                    if strategy_type not in near_groups:
+                        near_groups[strategy_type] = []
+                    near_groups[strategy_type].append((symbol, result))
+
+            # 전략별로 출력 (C+D → C → D 순서)
+            strategy_order = ['전략C+D: 3분봉+5분봉 복합 진입', '전략C: 3분봉 시세 초입 포착', '전략D: 5분봉 초입 초강력 타점']
+            for strategy_type in strategy_order:
+                print(f"\n진입임박 [{strategy_type}] (1개 조건 미충족)")
+                if strategy_type not in near_groups:
+                    print("   없음")
+                    continue
+                symbol_results = near_groups[strategy_type]
+
+                for symbol, result in symbol_results:
+                    clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
+                    change_pct = result.get('change_24h', 0)
+                    # 문자열을 숫자로 안전하게 변환
+                    try:
+                        change_pct = float(change_pct) if change_pct != 0 else 0.0
+                    except (ValueError, TypeError):
+                        change_pct = 0.0
+
+                    if strategy_type == '전략D: 5분봉 초입 초강력 타점':
+                        total_conditions = result.get('total_conditions', 6)
+                        failed_count = result.get('failed_count', 0)
+
+                        # 문자열을 숫자로 안전하게 변환
+                        try:
+                            total_conditions = int(total_conditions)
+                            failed_count = int(failed_count)
+                        except (ValueError, TypeError):
+                            total_conditions = 6
+                            failed_count = 0
+
+                        # 통과한 조건 개수 계산 (음수 방지)
+                        passed_count = max(0, total_conditions - failed_count)
+
+                        # 🎨 새로운 형식으로 표시: UB [+-2.7%] (2/3) ⚠️ 1개 조건 미충족
+                        if failed_count == 1:
+                            print(f"   \033[93m\033[1m{clean_symbol}\033[0m [{change_pct:+.1f}%] ({passed_count}/{total_conditions}) ⚠️ 1개 조건 미충족")
+                        else:
+                            print(f"   {clean_symbol} [{change_pct:+.1f}%] ({passed_count}/{total_conditions}) ⚠️ {failed_count}개 조건 미충족")
+
+                        # 실패한 조건들만 명확하게 표시 (최종 조건 제외)
+                        all_conditions = result['conditions']
+                        failed_main_conditions = [cond for cond in all_conditions
+                                                 if ': False' in cond
+                                                 and not cond.strip().startswith('ㄴ')
+                                                 and '최종' not in cond]
+
+                        for failed_condition in failed_main_conditions:
+                            # 조건 설명 추출
+                            condition_desc = self._extract_condition_description(failed_condition)
+
+                            # 🎨 1개 실패(near_entry)인 경우 미충족 조건을 주황색으로 표시
+                            if failed_count == 1:
+                                print(f"\033[33m      ❌ {condition_desc}\033[0m")
+                            else:
+                                print(f"\033[91m      ❌ {condition_desc}\033[0m")
+
+                            # 해당 조건의 바로 다음 상세 정보들만 출력
+                            failed_idx = all_conditions.index(failed_condition)
+                            for i in range(failed_idx + 1, len(all_conditions)):
+                                if all_conditions[i].strip().startswith('ㄴ'):
+                                    print(f"\033[91m         {all_conditions[i]}\033[0m")
+                                else:
+                                    break
+
+                    elif strategy_type == '전략C: 3분봉 시세 초입 포착':
+                        total_conditions = result.get('total_conditions', 6)
+                        failed_count = result.get('failed_count', 0)
+
+                        # 문자열을 숫자로 안전하게 변환
+                        try:
+                            total_conditions = int(total_conditions)
+                            failed_count = int(failed_count)
+                        except (ValueError, TypeError):
+                            total_conditions = 6
+                            failed_count = 0
+
+                        # 통과한 조건 개수 계산 (음수 방지)
+                        passed_count = max(0, total_conditions - failed_count)
+
+                        # 🎨 새로운 형식으로 표시: UB [+-2.7%] (2/3) ⚠️ 1개 조건 미충족
+                        if failed_count == 1:
+                            print(f"   \033[93m\033[1m{clean_symbol}\033[0m [{change_pct:+.1f}%] ({passed_count}/{total_conditions}) ⚠️ 1개 조건 미충족")
+                        else:
+                            print(f"   {clean_symbol} [{change_pct:+.1f}%] ({passed_count}/{total_conditions}) ⚠️ {failed_count}개 조건 미충족")
+
+                        # 실패한 조건들만 명확하게 표시 (최종 조건 제외)
+                        all_conditions = result['conditions']
+                        failed_main_conditions = [cond for cond in all_conditions
+                                                 if ': False' in cond
+                                                 and not cond.strip().startswith('ㄴ')
+                                                 and '최종' not in cond]
+
+                        for failed_condition in failed_main_conditions:
+                            # 조건 설명 추출
+                            condition_desc = self._extract_condition_description(failed_condition)
+
+                            # 🎨 1개 실패(near_entry)인 경우 미충족 조건을 주황색으로 표시
+                            if failed_count == 1:
+                                print(f"\033[33m      ❌ {condition_desc}\033[0m")
+                            else:
+                                print(f"\033[91m      ❌ {condition_desc}\033[0m")
+
+                            # 해당 조건의 바로 다음 상세 정보들만 출력
+                            failed_idx = all_conditions.index(failed_condition)
+                            for i in range(failed_idx + 1, len(all_conditions)):
+                                if all_conditions[i].strip().startswith('ㄴ'):
+                                    print(f"\033[91m         {all_conditions[i]}\033[0m")
+                                else:
+                                    break
+        else:
+            # 활성화된 전략만 표시 (C전략 → D전략 순서)
+            print(f"\n진입임박 [전략C: 3분봉 시세 초입 포착] (1개 조건 미충족)")
+            print("   없음")
+            print(f"\n진입임박 [전략D: 5분봉 초입 초강력 타점] (1개 조건 미충족)")
+            print("   없음")
+
+    def _print_potential_entry_signals(self, potential_entry):
+        """POTENTIAL_ENTRY 신호 출력 함수"""
+        if potential_entry:
+            # 전략별로 그룹핑
+            potential_groups = {}
+            for result in potential_entry:
+                strategy_type = result.get('strategy_type', '전략C: 3분봉 시세 초입 포착')
+                if strategy_type not in potential_groups:
+                    potential_groups[strategy_type] = []
+                potential_groups[strategy_type].append(result)
+
+            # 전략별로 출력 (가로 정렬, C+D → C → D 순서)
+            strategy_order = ['전략C+D: 3분봉+5분봉 복합 진입', '전략C: 3분봉 시세 초입 포착', '전략D: 5분봉 초입 초강력 타점']
+            for strategy_type in strategy_order:
+                print(f"\n진입확률 [{strategy_type}] (2개 조건 미충족)")
+                if strategy_type not in potential_groups:
+                    print("   없음")
+                    continue
+                results = potential_groups[strategy_type]
+
+                # 심볼별로 미충족 조건 자세히 출력 (테이블 형식)
+                for result in results:
+                    clean_symbol = result['symbol'].replace('/USDT:USDT', '').replace('/USDT', '')
+                    change_24h = result.get('change_24h', 0)
+                    try:
+                        change_24h = float(change_24h) if change_24h != 0 else 0.0
+                    except (ValueError, TypeError):
+                        change_24h = 0.0
+
+                    failed_count = result.get('failed_count', 0)
+                    total_conditions = result.get('total_conditions', 6)
+
+                    try:
+                        failed_count = int(failed_count)
+                        total_conditions = int(total_conditions)
+                    except (ValueError, TypeError):
+                        failed_count = 0
+                        total_conditions = 6
+
+                    passed_count = total_conditions - failed_count
+
+                    # 미충족 조건들 수집
+                    all_conditions = result.get('conditions', [])
+                    failed_main_conditions = [cond for cond in all_conditions
+                                             if ': False' in cond
+                                             and not cond.strip().startswith('ㄴ')
+                                             and '최종' not in cond]
+
+                    failed_msgs = []
+                    for failed_condition in failed_main_conditions:
+                        # 조건 번호를 구체적인 설명으로 변경
+                        if '[3분봉 3번째-1]' in failed_condition:
+                            failed_msgs.append("조건1: BB200상단-BB480상단 골든크로스")
+                        elif '[3분봉 3번째-2A]' in failed_condition:
+                            failed_msgs.append("조건2A: MA5-MA20 데드크로스 확인")
+                        elif '[3분봉 3번째-2B]' in failed_condition:
+                            failed_msgs.append("조건2B: MA1-MA5 골든크로스")
+                        elif '[3분봉 3번째-2C]' in failed_condition:
+                            failed_msgs.append("조건2C: MA5<MA20 또는 이격도 2%이내")
+                        elif '[5분봉 D전략-1]' in failed_condition:
+                            failed_msgs.append("D조건1: 15분봉 MA80<MA480")
+                        elif '[5분봉 D전략-2]' in failed_condition:
+                            failed_msgs.append("D조건2: 5분봉 SuperTrend 매수신호")
+                        elif '[5분봉 D전략-3]' in failed_condition:
+                            failed_msgs.append("D조건3: MA80-MA480 골든크로스 OR 이격도<5%")
+                        elif '[5분봉 D전략-4]' in failed_condition:
+                            failed_msgs.append("D조건4: MA480 하락+BB200-MA480 골든")
+                        elif '[5분봉 D전략-5]' in failed_condition:
+                            failed_msgs.append("D조건5: MA5-MA20 골든크로스")
+                        # 단순한 조건명들 처리 (실제 출력에서 나오는 패턴들)
+                        elif 'condition_3m_c1' in failed_condition or '조건1' in failed_condition:
+                            failed_msgs.append("조건1: BB200상단-BB480상단 골든크로스")
+                        elif 'condition_2' in failed_condition or '조건2' in failed_condition:
+                            # 세부 조건을 확인하여 더 구체적으로 분류
+                            if '2B' in failed_condition or 'c2b' in failed_condition:
+                                failed_msgs.append("조건2B: MA1-MA5 골든크로스")
+                            elif '2A' in failed_condition or 'c2a' in failed_condition:
+                                failed_msgs.append("조건2A: MA5-MA20 데드크로스 확인")
+                            elif '2C' in failed_condition or 'c2c' in failed_condition:
+                                failed_msgs.append("조건2C: MA5<MA20 또는 이격도 2%이내")
+                            else:
+                                failed_msgs.append("조건2: 복합 MA 조건 (2A AND 2B AND 2C)")
+                        else:
+                            # 알 수 없는 조건은 _extract_condition_description 사용
+                            condition_desc = self._extract_condition_description(failed_condition)
+                            failed_msgs.append(condition_desc)
+
+                    # 🎨 새로운 형식으로 표시: UB [+-2.7%] (2/3) ⚠️ 2개 조건 미충족
+                    failed_count = total_conditions - passed_count
+                    print(f"   {clean_symbol} [{change_24h:+.1f}%] ({passed_count}/{total_conditions}) ⚠️ {failed_count}개 조건 미충족")
+                    # 미충족 조건들을 상세히 표시
+                    for failed_msg in failed_msgs:
+                        print(f"\033[91m      ❌ {failed_msg}\033[0m")
+        else:
+            # 모든 전략을 개별적으로 표시 (C전략 → D전략 순서)
+            print(f"\n진입확률 [전략C: 3분봉 시세 초입 포착] (2개 조건 미충족)")
+            print("   없음")
+            print(f"\n진입확률 [전략D: 5분봉 초입 초강력 타점] (2개 조건 미충족)")
+            print("   없음")
+
+    def _print_watchlist_signals(self, watchlist):
+        """WATCHLIST 신호 출력 함수"""
+        if watchlist:
+            # 전략별로 그룹핑
+            watchlist_groups = {}
+            for result in watchlist:
+                strategy_type = result.get('strategy_type', '전략C: 3분봉 시세 초입 포착')
+                if strategy_type not in watchlist_groups:
+                    watchlist_groups[strategy_type] = []
+                watchlist_groups[strategy_type].append(result)
+
+            # 📊 미충족 조건 통계 수집
+            failed_condition_stats = {}
+
+            # 전략별로 출력 (C+D → C → D 순서)
+            strategy_order = ['전략C+D: 3분봉+5분봉 복합 진입', '전략C: 3분봉 시세 초입 포착', '전략D: 5분봉 초입 초강력 타점']
+            for strategy in strategy_order:
+                # 🚨 FIX: 하드코딩 제거하고 실제 조건 상태 표시
+                if strategy not in watchlist_groups:
+                    print(f"\n[WATCHLIST] 관심종목 [{strategy}] (조건 미충족)")
+                    print("   없음")
+                    continue
+
+                # 실제 조건 통계 계산
+                items = watchlist_groups[strategy]
+                failed_counts = [result.get('failed_count', 0) for result in items]
+                total_counts = [result.get('total_conditions', 3 if 'C:' in strategy else 5) for result in items]
+
+                # 대표값 계산 (가장 많은 유형)
+                avg_failed = sum(failed_counts) / len(failed_counts) if failed_counts else 0
+                avg_total = sum(total_counts) / len(total_counts) if total_counts else (3 if 'C:' in strategy else 5)
+
+                print(f"\n[WATCHLIST] 관심종목 [{strategy}] ({avg_failed:.0f}개 조건 미충족, 평균 {avg_total-avg_failed:.0f}/{avg_total:.0f} 통과)")
+
+                # 심볼 정보 수집
+                symbol_infos = []
+                for result in items:
+                    clean_symbol = result['symbol'].replace('/USDT:USDT', '').replace('/USDT', '')
+                    change_24h = result.get('change_24h', 0)
+                    # 문자열을 숫자로 안전하게 변환
+                    try:
+                        change_24h = float(change_24h) if change_24h != 0 else 0.0
+                    except (ValueError, TypeError):
+                        change_24h = 0.0
+
+                    failed_count = result.get('failed_count', 0)
+                    total_conditions = result.get('total_conditions', 11)
+
+                    # 문자열을 숫자로 안전하게 변환
+                    try:
+                        failed_count = int(failed_count)
+                        total_conditions = int(total_conditions)
+                    except (ValueError, TypeError):
+                        failed_count = 0
+                        total_conditions = 11
+
+                    # 🔧 안전한 통과 조건 계산 (음수 방지)
+                    passed_count = max(0, total_conditions - failed_count)
+
+                    # 미충족 조건 추출 (통계용)
+                    conditions = result.get('conditions', [])
+                    failed_conditions = [cond for cond in conditions if ': False' in cond]
+
+                    # 통계 수집
+                    for failed_cond in failed_conditions:
+                        cond_name = failed_cond.split(':')[0].strip()
+                        if cond_name not in failed_condition_stats:
+                            failed_condition_stats[cond_name] = 0
+                        failed_condition_stats[cond_name] += 1
+
+                    # 심볼 정보 포맷: SYMBOL(+변동률%, 통과/전체) - 음수 방지
+                    symbol_infos.append(f"{clean_symbol}({change_24h:+.1f}%, {passed_count}/{total_conditions})")
+
+                # 가로 정렬 출력 (한 줄에 5개씩)
+                for i in range(0, len(symbol_infos), 5):
+                    batch = symbol_infos[i:i+5]
+                    print(f"   {' | '.join(batch)}")
+
+            # 📊 전체 미충족 조건 통계 출력
+            if failed_condition_stats:
+                print(f"\n" + "="*60)
+                print(f"📊 관심종목 미충족 조건 통계 (상위 10개)")
+                print(f"="*60)
+
+                # 빈도순으로 정렬
+                sorted_stats = sorted(failed_condition_stats.items(), key=lambda x: x[1], reverse=True)
+
+                for idx, (cond_name, count) in enumerate(sorted_stats[:10], 1):
+                    # 조건 이름 간소화
+                    display_name = cond_name.replace('[3분봉 2번째-', '조건').replace(']', '')
+                    percentage = (count / len(watchlist)) * 100
+                    print(f"{idx:2d}. {display_name:50s} : {count:2d}회 ({percentage:5.1f}%)")
+
+                print(f"="*60)
+        else:
+            print(f"\n[WATCHLIST] 관심종목 (3~4개 조건 미충족)")
+            print("   없음")
 
     def scan_symbols(self, symbols):
         """심볼들 병렬 스캔 (Rate Limit 고려) - 버그 수정된 안전 버전"""
@@ -3879,659 +4267,67 @@ class OneMinuteSurgeEntryStrategy:
         print("📍 분류 기준 → 진입임박(NEAR): 1개 미충족 | 진입확률(POTENTIAL): 2개 미충족 | 관심종목(WATCHLIST): 3~4개 미충족")
         print("="*60)
 
-        # 분류별 결과 출력 (전략별로 그룹핑)
+        # 분류별 결과 출력 (출력 함수 호출)
+        self._print_entry_signals(entry_signals)
+
+        # 거래 실행 로직 (ENTRY 신호만 처리)
         if entry_signals:
-            # 전략별로 그룹핑
-            strategy_groups = {}
             for result in entry_signals:
-                strategy_type = result.get('strategy_type', '전략C: 3분봉 시세 초입 포착')
-                if strategy_type not in strategy_groups:
-                    strategy_groups[strategy_type] = []
-                strategy_groups[strategy_type].append(result)
+                clean_symbol = result['symbol'].replace('/USDT:USDT', '').replace('/USDT', '')
 
-            # 전략별로 출력 (C+D → C → D 순서)
-            strategy_order = ['전략C+D: 3분봉+5분봉 복합 진입', '전략C: 3분봉 시세 초입 포착', '전략D: 5분봉 초입 초강력 타점']
-            for strategy in strategy_order:
-                if strategy not in strategy_groups:
+                # ⚡ 중복 방지: 먼저 신호 발송 기록 확인
+                already_sent_signal = clean_symbol in self._sent_signals
+                if already_sent_signal:
+                    print(f"[중복방지] {clean_symbol} 이미 신호 발송됨 - 스킵")
                     continue
-                signals = strategy_groups[strategy]
-                print(f"\n[SIGNAL] 진입신호 [{strategy}]")
-                for result in signals:
-                    clean_symbol = result['symbol'].replace('/USDT:USDT', '').replace('/USDT', '')
-                    # 충족된 조건들 가져오기
-                    satisfied_conditions = result.get('conditions_summary', ['전체조건충족'])
-                    conditions_text = " | ".join(satisfied_conditions) if satisfied_conditions else "전체조건충족"
-                    
-                    # 이미 계산된 24시간 변동률 사용 (API 호출 방지)
+
+                # 실제 바이낸스 계좌에서 포지션 확인
+                has_existing_position = self.check_existing_position(result['symbol'])
+
+                if has_existing_position:
+                    print(f"[진입방지] {clean_symbol} 계좌에 기존 포지션 존재 - 스킵")
+                    continue
+
+                # ✅ 진입 신호 발송 기록 (매매 실행 전에 먼저 기록)
+                self._sent_signals.add(clean_symbol)
+
+                # 🚀 속도 테스트 모드 확인
+                if hasattr(self, '_trading_disabled') and self._trading_disabled:
+                    print(f"[속도테스트] ⚡ {clean_symbol} 매매 실행 건너뛰기 (속도 우선)")
+                    continue
+
+                # 🎯 실제 매매 실행 (API 키 있을 때만)
+                change_pct = result.get('change_24h', 0)
+                try:
+                    change_pct = float(change_pct) if change_pct != 0 else 0.0
+                except (ValueError, TypeError):
+                    change_pct = 0.0
+
+                if hasattr(self.exchange, 'apiKey') and self.exchange.apiKey:
+                    print(f"[매매실행] 🎯 {clean_symbol} 자동매매 실행 시작...")
                     try:
-                        change_pct = result.get('change_24h', 0)
-                        # 문자열을 숫자로 안전하게 변환
-                        try:
-                            change_pct = float(change_pct) if change_pct != 0 else 0.0
-                        except (ValueError, TypeError):
-                            change_pct = 0.0
-
-                        # 🔥 진입신호 - 심볼명 초록색, 이모지 빨간색
-                        print(f"\033[91m🔥\033[0m \033[92m\033[1m{clean_symbol}\033[0m [24h:{change_pct:+.1f}%]")
-                        print(f"      🎯 충족조건: {conditions_text}")
-                        
-                        # 🚨 진입 처리를 텔레그램 조건 밖으로 이동
-                        # ⚡ 중복 방지: 먼저 신호 발송 기록 확인
-                        already_sent_signal = clean_symbol in self._sent_signals
-                        if already_sent_signal:
-                            print(f"[중복방지] {clean_symbol} 이미 신호 발송됨 - 스킵")
-                            continue
-                        
-                        # 실제 바이낸스 계좌에서 포지션 확인
-                        has_existing_position = self.check_existing_position(result['symbol'])
-                        
-                        if has_existing_position:
-                            print(f"[진입방지] {clean_symbol} 계좌에 기존 포지션 존재 - 스킵")
-                            continue
-                        
-                        # ✅ 진입 신호 발송 기록 (매매 실행 전에 먼저 기록)
-                        self._sent_signals.add(clean_symbol)
-                        
-                        # 🚀 속도 테스트 모드 확인
-                        if hasattr(self, '_trading_disabled') and self._trading_disabled:
-                            print(f"[속도테스트] ⚡ {clean_symbol} 매매 실행 건너뛰기 (속도 우선)")
+                        success = self.execute_trade(result['symbol'], result['price'])
+                        if success:
+                            print(f"[매매실행] ✅ {clean_symbol} 자동매매 성공!")
                         else:
-                            # 🎯 실제 매매 실행 (API 키 있을 때만)
-                            if hasattr(self.exchange, 'apiKey') and self.exchange.apiKey:
-                                print(f"[매매실행] 🎯 {clean_symbol} 자동매매 실행 시작...")
-                                try:
-                                    success = self.execute_trade(result['symbol'], result['price'])
-                                    if success:
-                                        print(f"[매매실행] ✅ {clean_symbol} 자동매매 성공!")
-                                    else:
-                                        print(f"[매매실행] ❌ {clean_symbol} 자동매매 실패")
-                                except Exception as trade_error:
-                                    print(f"[매매실행] ❌ {clean_symbol} 매매 예외: {trade_error}")
-                                    import traceback
-                                    traceback.print_exc()
-                            else:
-                                print(f"[매매실행] ⚠️ {clean_symbol} API 키 없음 - 시뮬레이션 모드")
-                                print(f"   📝 진입가: ${result['price']:.6f}")
-                                print(f"   📈 24h 변동률: +{change_pct:.1f}%")
-                        
-                        # 텔레그램 알림 (진입 신호시) - 실제 포지션 기반 중복 방지
-                        if self.telegram_bot:
-                            # ⚡ 중복 방지: 먼저 신호 발송 기록 확인
-                            already_sent_signal = clean_symbol in self._sent_signals
-                            if already_sent_signal:
-                                print(f"[중복방지] {clean_symbol} 이미 신호 발송됨 - 스킵")
-                                continue
-
-                            # 실제 바이낸스 계좌에서 포지션 확인
-                            has_existing_position = self.check_existing_position(result['symbol'])
-
-                            should_send_message = not has_existing_position and not already_sent_signal
-                            
-                            if has_existing_position:
-                                print(f"[Telegram] {clean_symbol} 중복 진입 방지 (계좌에 기존 포지션 존재)")
-                            elif already_sent_signal:
-                                print(f"[Telegram] {clean_symbol} 중복 진입 방지 (이미 진입 신호 발송됨)")
-                            
-                            if should_send_message:
-                                # 일봉 캔들 변동률 가져오기
-                                daily_candle_change = result.get('daily_candle_change', 0)
-
-                                # 상세한 진입 신호 메시지 (전략별 구분)
-                                actual_strategy = strategy_type  # 실제 진입 전략 저장
-                                message = f"🚨 {actual_strategy} 진입 신호 🚨\n"
-                                message += f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                message += f"📈 심볼: {clean_symbol}\n"
-                                message += f"💰 현재가: ${result['price']:.6f}\n"
-                                message += f"📊 변동률:\n"
-                                message += f"   • 24h: {change_pct:+.1f}%\n"
-                                message += f"   • 일봉캔들: {daily_candle_change:+.1f}%\n"
-                                message += f"⏰ 신호발생: {result['timestamp']}\n"
-                                message += f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                
-                                # 전략 분류 정보 (실제 전략과 상승률 분류 모두 표시)
-                                surge_type = "일반전략" if change_pct < 20.0 else "급등특별전략"
-                                message += f"🎯 진입전략: {actual_strategy}\n"
-                                message += f"📊 분류: {surge_type} (24h {change_pct:+.1f}%)\n"
-                                
-                                # 상세 조건 정보 (충족된 조건 개수 동적 계산)
-                                conditions = result.get('conditions', [])
-                                satisfied_conditions = [c for c in conditions if ': True' in c and not c.startswith('  ㄴ') and not c.startswith('[전략]') and not c.startswith('[최종')]
-                                satisfied_count = len(satisfied_conditions)
-
-                                message += f"✅ 충족조건 ({satisfied_count}개):\n"
-                                for condition in satisfied_conditions:
-                                    clean_condition = condition.replace(': True', '').replace('[3분봉 2번째-', '').replace('[급등-', '')
-                                    message += f"   • {clean_condition}\n"
-                                
-                                message += f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                message += f"💡 거래설정:\n"
-                                message += f"   • 레버리지: 10배\n"
-                                message += f"   • 포지션: 0.8% 상당 (0.8%×10배)\n"
-                                message += f"   • DCA: -3%/-6% 단계별\n"
-                                message += f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                message += f"🔍 검증정보 (신호발생시점):\n"
-                                message += f"   • 시간: {result['timestamp']}\n"
-                                message += f"   • 현재가: ${result['price']:.6f}\n"
-                                message += f"   • 변동률: 24h({change_pct:+.1f}%) / 일봉({daily_candle_change:+.1f}%)\n"
-                                message += f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                message += f"⚠️ 투자 전 충분한 검토 필요"
-                                
-                                try:
-                                    # ⚡ 중복 방지: 최종 확인 (스레드 안전성)
-                                    if clean_symbol in self._sent_signals:
-                                        print(f"[중복방지-최종] {clean_symbol} 이미 신호 발송됨 - 스킵")
-                                        continue
-
-                                    # 진입 신호 메시지는 제거 - 실제 거래 성공 후에만 알림
-                                    print(f"[Signal] {clean_symbol} 진입 조건 충족 - 거래 실행 대기")
-
-                                    # ✅ 진입 신호 발송 기록 (매매 실행 전에 먼저 기록)
-                                    self._sent_signals.add(clean_symbol)
-
-                                    # 🚀 속도 테스트 모드: 매매 실행 완전 건너뛰기
-                                    if hasattr(self, '_trading_disabled') and self._trading_disabled:
-                                        print(f"[속도테스트] ⚡ {clean_symbol} 매매 실행 건너뛰기 (속도 우선)")
-                                        continue
-                                    
-                                    # 실제 매매 실행 (API 키 있을 때만)
-                                    if hasattr(self.exchange, 'apiKey') and self.exchange.apiKey:
-                                        print(f"[매매실행] 🎯 {clean_symbol} 자동매매 실행 시작...")
-                                        try:
-                                            success = self.execute_trade(result['symbol'], result['price'])
-                                            if success:
-                                                print(f"[매매실행] ✅ {clean_symbol} 자동매매 성공!")
-                                            else:
-                                                print(f"[매매실행] ❌ {clean_symbol} 자동매매 실패")
-                                        except Exception as trade_error:
-                                            print(f"[매매실행] ❌ {clean_symbol} 매매 예외: {trade_error}")
-                                            import traceback
-                                            traceback.print_exc()
-                                    else:
-                                        print(f"[매매실행] ⚠️ {clean_symbol} API 키 없음 - 시뮬레이션 모드")
-                                        print(f"   📝 진입가: ${result['price']:.6f}")
-                                        print(f"   📈 24h 변동률: +{change_pct:.1f}%")
-                                    
-                                except Exception as e:
-                                    self.logger.error(f"텔레그램 알림 실패: {e}")
-                                
-                    except Exception as e:
-                        # 변동률 계산 실패시에도 기본 정보는 출력
-                        change_pct = result.get('change_24h', 0)
-                        try:
-                            change_pct = float(change_pct) if change_pct != 0 else 0.0
-                        except:
-                            change_pct = 0.0
-                        print(f"   \033[92m\033[1m{clean_symbol}\033[0m [24h:{change_pct:+.1f}%]")
-                        print(f"      🎯 충족조건: {conditions_text}")
-                        print(f"      ⚠️ 변동률 조회 오류: {e}")
-        else:
-            print(f"\n[SIGNAL] 진입신호 [전략C: 3분봉 시세 초입 포착]")
-            print("   없음")
-
-            print(f"\n[SIGNAL] 진입신호 [전략D: 5분봉 초입 초강력 타점]") 
-            print("   없음")
+                            print(f"[매매실행] ❌ {clean_symbol} 자동매매 실패")
+                    except Exception as trade_error:
+                        print(f"[매매실행] ❌ {clean_symbol} 매매 예외: {trade_error}")
+                        import traceback
+                        traceback.print_exc()
+                else:
+                    print(f"[매매실행] ⚠️ {clean_symbol} API 키 없음 - 시뮬레이션 모드")
+                    print(f"   📝 진입가: ${result['price']:.6f}")
+                    print(f"   📈 24h 변동률: +{change_pct:.1f}%")
         
-        # 심볼별로 NEAR 결과 그룹핑 (동일 심볼에 대해 두 전략 결과 모두 표시)
-        near_by_symbol = {}
-        for result in near_entry:
-            symbol = result['symbol']
-            if symbol not in near_by_symbol:
-                near_by_symbol[symbol] = {}
-            strategy_type = result.get('strategy_type', '전략C: 3분봉 시세 초입 포착')
-            near_by_symbol[symbol][strategy_type] = result
+        # NEAR_ENTRY 신호 출력 (헬퍼 함수 호출)
+        self._print_near_entry_signals(near_entry)
 
-        # 전략별로 NEAR 출력 (전략별 그룹화)
-        if near_by_symbol:
-            # 전략별로 그룹핑
-            near_groups = {}
-            for symbol, strategies in near_by_symbol.items():
-                for strategy_type, result in strategies.items():
-                    if strategy_type not in near_groups:
-                        near_groups[strategy_type] = []
-                    near_groups[strategy_type].append((symbol, result))
+        # POTENTIAL_ENTRY 신호 출력 (헬퍼 함수 호출)
+        self._print_potential_entry_signals(potential_entry)
 
-            # 전략별로 출력 (C+D → C → D 순서)
-            strategy_order = ['전략C+D: 3분봉+5분봉 복합 진입', '전략C: 3분봉 시세 초입 포착', '전략D: 5분봉 초입 초강력 타점']
-            for strategy_type in strategy_order:
-                print(f"\n진입임박 [{strategy_type}] (1개 조건 미충족)")
-                if strategy_type not in near_groups:
-                    print("   없음")
-                    continue
-                symbol_results = near_groups[strategy_type]
-                
-                for symbol, result in symbol_results:
-                    clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
-                    change_pct = result.get('change_24h', 0)
-                    # 문자열을 숫자로 안전하게 변환
-                    try:
-                        change_pct = float(change_pct) if change_pct != 0 else 0.0
-                    except (ValueError, TypeError):
-                        change_pct = 0.0
-                    
-                    # A전략 제거됨 - 해당 조건 삭제
-                    if False:  # 기존 1분봉-15분봉 조합전략 코드 비활성화
-                        # 개별 전략 정보 가져오기
-                        passed_1m = result.get('passed_1m', 0)
-                        total_1m = result.get('total_1m', 6)
-                        passed_3m = result.get('passed_3m', 0)
-                        total_3m = result.get('total_3m', 6)
-                        passed_15m = result.get('passed_15m', 0)
-                        total_15m = result.get('total_15m', 3)
-                        gap_1m = result.get('gap_1m', 0)
-                        gap_15m = result.get('gap_15m', 0)
-
-                        # 문자열을 숫자로 안전하게 변환
-                        try:
-                            passed_1m = int(passed_1m)
-                            total_1m = int(total_1m)
-                            passed_3m = int(passed_3m)
-                            total_3m = int(total_3m)
-                            passed_15m = int(passed_15m)
-                            total_15m = int(total_15m)
-                            gap_1m = int(gap_1m)
-                            gap_15m = int(gap_15m)
-                        except (ValueError, TypeError):
-                            passed_1m = 0
-                            total_1m = 6
-                            passed_3m = 0
-                            total_3m = 6
-                            passed_15m = 0
-                            total_15m = 3
-                            gap_1m = 0
-                            gap_15m = 0
-
-                        # 조건 충족 상태 표시 (명확하게: 실제 미충족 개수 표시)
-                        failed_1m = total_1m - passed_1m
-                        failed_15m = total_15m - passed_15m
-
-                        if failed_1m == 0 and failed_15m == 0:
-                            status_msg = "✅ 전체 조건 충족"
-                        elif gap_1m > 0 and gap_15m == 0:
-                            # 1분봉만 부족 (15분봉은 충족)
-                            status_msg = f"⚠️ 1분봉 {failed_1m}개 미충족 (통과까지 {gap_1m}개 필요)"
-                        elif gap_1m == 0 and gap_15m > 0:
-                            # 15분봉만 부족 (1분봉은 충족)
-                            status_msg = f"⚠️ 15분봉 {failed_15m}개 미충족 (통과까지 {gap_15m}개 필요)"
-                        else:
-                            # 둘 다 부족
-                            status_msg = f"⚠️ 1분봉 {failed_1m}개, 15분봉 {failed_15m}개 미충족"
-
-                        print(f"   {clean_symbol} [+{change_pct:.1f}%] 1분봉:{passed_1m}/{total_1m}, 3분봉:{passed_3m}/{total_3m}, 15분봉:{passed_15m}/{total_15m} {status_msg}")
-
-                        # 실패한 조건들을 시간프레임별로 분류해서 표시
-                        all_conditions = result['conditions']
-                        failed_main_conditions = [cond for cond in all_conditions if ': False' in cond and not cond.strip().startswith('ㄴ')]
-                        
-                        # 15분봉 미충족인 경우 15분봉 조건만 표시, 1분봉 미충족인 경우 1분봉 조건만 표시
-                        if gap_1m == 0 and gap_15m > 0:
-                            # 15분봉만 부족 - 15분봉 조건만 표시 (정확한 조건명 기준)
-                            failed_15m_conditions = [cond for cond in failed_main_conditions if '[15분봉' in cond]
-                            for failed_condition in failed_15m_conditions:
-                                print(f"\033[91m      ❌ {failed_condition}\033[0m")
-                        elif gap_1m > 0 and gap_15m == 0:
-                            # 1분봉만 부족 - 1분봉 조건만 표시 (1분봉-15분봉 조합 조건은 1분봉으로 분류)
-                            failed_1m_conditions = [cond for cond in failed_main_conditions if '[1분봉' in cond or '[1분봉-15분봉 조합' in cond]
-                            for failed_condition in failed_1m_conditions:
-                                print(f"\033[91m      ❌ {failed_condition}\033[0m")
-                        else:
-                            # 둘 다 부족하거나 모든 조건 충족 - 모든 실패 조건 표시
-                            for failed_condition in failed_main_conditions:
-                                print(f"\033[91m      ❌ {failed_condition}\033[0m")
-                                
-                                # 해당 조건의 바로 다음 상세 정보들만 출력
-                                failed_idx = all_conditions.index(failed_condition)
-                                for i in range(failed_idx + 1, len(all_conditions)):
-                                    if all_conditions[i].strip().startswith('ㄴ'):
-                                        print(f"\033[91m         {all_conditions[i]}\033[0m")
-                                    else:
-                                        break  # 다음 주요 조건이 나오면 중단
-                    
-                    elif strategy_type == '전략D: 5분봉 초입 초강력 타점':
-                        total_conditions = result.get('total_conditions', 6)
-                        failed_count = result.get('failed_count', 0)
-                        
-                        # 문자열을 숫자로 안전하게 변환
-                        try:
-                            total_conditions = int(total_conditions)
-                            failed_count = int(failed_count)
-                        except (ValueError, TypeError):
-                            total_conditions = 6
-                            failed_count = 0
-
-                        # 통과한 조건 개수 계산 (음수 방지)
-                        passed_count = max(0, total_conditions - failed_count)
-                        
-                        # 🎨 새로운 형식으로 표시: UB [+-2.7%] (2/3) ⚠️ 1개 조건 미충족
-                        if failed_count == 1:
-                            print(f"   \033[93m\033[1m{clean_symbol}\033[0m [{change_pct:+.1f}%] ({passed_count}/{total_conditions}) ⚠️ 1개 조건 미충족")
-                        else:
-                            print(f"   {clean_symbol} [{change_pct:+.1f}%] ({passed_count}/{total_conditions}) ⚠️ {failed_count}개 조건 미충족")
-
-                        # 실패한 조건들만 명확하게 표시 (최종 조건 제외)
-                        all_conditions = result['conditions']
-                        failed_main_conditions = [cond for cond in all_conditions
-                                                 if ': False' in cond
-                                                 and not cond.strip().startswith('ㄴ')
-                                                 and '최종' not in cond]  # ✅ 최종 조건 제외
-
-                        for failed_condition in failed_main_conditions:
-                            # 조건 설명 추출
-                            condition_desc = self._extract_condition_description(failed_condition)
-                            
-                            # 🎨 1개 실패(near_entry)인 경우 미충족 조건을 주황색으로 표시
-                            if failed_count == 1:
-                                print(f"\033[33m      ❌ {condition_desc}\033[0m")
-                            else:
-                                print(f"\033[91m      ❌ {condition_desc}\033[0m")
-
-                            # 해당 조건의 바로 다음 상세 정보들만 출력
-                            failed_idx = all_conditions.index(failed_condition)
-                            for i in range(failed_idx + 1, len(all_conditions)):
-                                if all_conditions[i].strip().startswith('ㄴ'):
-                                    print(f"\033[91m         {all_conditions[i]}\033[0m")
-                                else:
-                                    break  # 다음 주요 조건이 나오면 중단
-                    
-                    elif strategy_type == '전략C: 3분봉 시세 초입 포착':
-                        total_conditions = result.get('total_conditions', 6)
-                        failed_count = result.get('failed_count', 0)
-                        
-                        # 문자열을 숫자로 안전하게 변환
-                        try:
-                            total_conditions = int(total_conditions)
-                            failed_count = int(failed_count)
-                        except (ValueError, TypeError):
-                            total_conditions = 6
-                            failed_count = 0
-
-                        # 통과한 조건 개수 계산 (음수 방지)
-                        passed_count = max(0, total_conditions - failed_count)
-                        
-                        # 🎨 새로운 형식으로 표시: UB [+-2.7%] (2/3) ⚠️ 1개 조건 미충족
-                        if failed_count == 1:
-                            print(f"   \033[93m\033[1m{clean_symbol}\033[0m [{change_pct:+.1f}%] ({passed_count}/{total_conditions}) ⚠️ 1개 조건 미충족")
-                        else:
-                            print(f"   {clean_symbol} [{change_pct:+.1f}%] ({passed_count}/{total_conditions}) ⚠️ {failed_count}개 조건 미충족")
-
-                        # 실패한 조건들만 명확하게 표시 (최종 조건 제외)
-                        all_conditions = result['conditions']
-                        failed_main_conditions = [cond for cond in all_conditions
-                                                 if ': False' in cond
-                                                 and not cond.strip().startswith('ㄴ')
-                                                 and '최종' not in cond]  # ✅ 최종 조건 제외
-
-                        for failed_condition in failed_main_conditions:
-                            # 조건 설명 추출
-                            condition_desc = self._extract_condition_description(failed_condition)
-                            
-                            # 🎨 1개 실패(near_entry)인 경우 미충족 조건을 주황색으로 표시
-                            if failed_count == 1:
-                                print(f"\033[33m      ❌ {condition_desc}\033[0m")
-                            else:
-                                print(f"\033[91m      ❌ {condition_desc}\033[0m")
-
-                            # 해당 조건의 바로 다음 상세 정보들만 출력
-                            failed_idx = all_conditions.index(failed_condition)
-                            for i in range(failed_idx + 1, len(all_conditions)):
-                                if all_conditions[i].strip().startswith('ㄴ'):
-                                    print(f"\033[91m         {all_conditions[i]}\033[0m")
-                                else:
-                                    break  # 다음 주요 조건이 나오면 중단
-        else:
-            # 활성화된 전략만 표시 (C전략 → D전략 순서)
-            print(f"\n진입임박 [전략C: 3분봉 시세 초입 포착] (1개 조건 미충족)")
-            print("   없음")
-            print(f"\n진입임박 [전략D: 5분봉 초입 초강력 타점] (1개 조건 미충족)")
-            print("   없음")
-
-        # 전략별로 POTENTIAL 출력 (전략별 그룹화)
-        if potential_entry:
-            # 전략별로 그룹핑
-            potential_groups = {}
-            for result in potential_entry:
-                strategy_type = result.get('strategy_type', '전략C: 3분봉 시세 초입 포착')
-                if strategy_type not in potential_groups:
-                    potential_groups[strategy_type] = []
-                potential_groups[strategy_type].append(result)
-
-            # 전략별로 출력 (가로 정렬, C+D → C → D 순서)
-            strategy_order = ['전략C+D: 3분봉+5분봉 복합 진입', '전략C: 3분봉 시세 초입 포착', '전략D: 5분봉 초입 초강력 타점']
-            for strategy_type in strategy_order:
-                print(f"\n진입확률 [{strategy_type}] (2개 조건 미충족)")
-                if strategy_type not in potential_groups:
-                    print("   없음")
-                    continue
-                results = potential_groups[strategy_type]
-                
-                # 심볼 정보 수집
-                symbol_infos = []
-                for result in results:
-                    clean_symbol = result['symbol'].replace('/USDT:USDT', '').replace('/USDT', '')
-                    change_24h = result.get('change_24h', 0)
-                    # 문자열을 숫자로 안전하게 변환
-                    try:
-                        change_24h = float(change_24h) if change_24h != 0 else 0.0
-                    except (ValueError, TypeError):
-                        change_24h = 0.0
-                    
-                    # A전략 제거됨 - 해당 조건 삭제
-                    if False:  # 기존 1분봉-15분봉 조합전략 코드 비활성화
-                        # 개별 전략 정보 가져오기
-                        passed_1m = result.get('passed_1m', 0)
-                        total_1m = result.get('total_1m', 6)
-                        passed_3m = result.get('passed_3m', 0)
-                        total_3m = result.get('total_3m', 6)
-                        passed_15m = result.get('passed_15m', 0)
-                        total_15m = result.get('total_15m', 3)
-                        
-                        # 문자열을 숫자로 안전하게 변환
-                        try:
-                            passed_1m = int(passed_1m)
-                            total_1m = int(total_1m)
-                            passed_3m = int(passed_3m)
-                            total_3m = int(total_3m)
-                            passed_15m = int(passed_15m)
-                            total_15m = int(total_15m)
-                        except (ValueError, TypeError):
-                            passed_1m = 0
-                            total_1m = 6
-                            passed_3m = 0
-                            total_3m = 6
-                            passed_15m = 0
-                            total_15m = 3
-                        
-                        symbol_infos.append(f"{clean_symbol}[+{change_24h:.1f}%]({passed_1m}/{total_1m},{passed_3m}/{total_3m},{passed_15m}/{total_15m})")
-                    else:
-                        # 3분봉 전략들
-                        failed_count = result.get('failed_count', 0)
-                        total_conditions = result.get('total_conditions', 6)
-                        
-                        # 문자열을 숫자로 안전하게 변환
-                        try:
-                            failed_count = int(failed_count)
-                            total_conditions = int(total_conditions)
-                        except (ValueError, TypeError):
-                            failed_count = 0
-                            total_conditions = 6
-                            
-                        passed_count = total_conditions - failed_count
-                        symbol_infos.append(f"{clean_symbol}[+{change_24h:.1f}%]({passed_count}/{total_conditions})")
-                
-                # 심볼별로 미충족 조건 자세히 출력 (테이블 형식)
-                for result in results:
-                    clean_symbol = result['symbol'].replace('/USDT:USDT', '').replace('/USDT', '')
-                    change_24h = result.get('change_24h', 0)
-                    try:
-                        change_24h = float(change_24h) if change_24h != 0 else 0.0
-                    except (ValueError, TypeError):
-                        change_24h = 0.0
-                    
-                    failed_count = result.get('failed_count', 0)
-                    total_conditions = result.get('total_conditions', 6)
-                    
-                    try:
-                        failed_count = int(failed_count)
-                        total_conditions = int(total_conditions)
-                    except (ValueError, TypeError):
-                        failed_count = 0
-                        total_conditions = 6
-                        
-                    passed_count = total_conditions - failed_count
-                    
-                    # 미충족 조건들 수집
-                    all_conditions = result.get('conditions', [])
-                    failed_main_conditions = [cond for cond in all_conditions
-                                             if ': False' in cond
-                                             and not cond.strip().startswith('ㄴ')
-                                             and '최종' not in cond]
-                    
-                    failed_msgs = []
-                    for failed_condition in failed_main_conditions:
-                        # 조건 번호를 구체적인 설명으로 변경
-                        if '[3분봉 3번째-1]' in failed_condition:
-                            failed_msgs.append("조건1: BB200상단-BB480상단 골든크로스")
-                        elif '[3분봉 3번째-2A]' in failed_condition:
-                            failed_msgs.append("조건2A: MA5-MA20 데드크로스 확인")
-                        elif '[3분봉 3번째-2B]' in failed_condition:
-                            failed_msgs.append("조건2B: MA1-MA5 골든크로스")
-                        elif '[3분봉 3번째-2C]' in failed_condition:
-                            failed_msgs.append("조건2C: MA5<MA20 또는 이격도 2%이내")
-                        elif '[5분봉 D전략-1]' in failed_condition:
-                            failed_msgs.append("D조건1: 15분봉 MA80<MA480")
-                        elif '[5분봉 D전략-2]' in failed_condition:
-                            failed_msgs.append("D조건2: 5분봉 SuperTrend 매수신호")
-                        elif '[5분봉 D전략-3]' in failed_condition:
-                            failed_msgs.append("D조건3: MA80-MA480 골든크로스 OR 이격도<5%")
-                        elif '[5분봉 D전략-4]' in failed_condition:
-                            failed_msgs.append("D조건4: MA480 하락+BB200-MA480 골든")
-                        elif '[5분봉 D전략-5]' in failed_condition:
-                            failed_msgs.append("D조건5: MA5-MA20 골든크로스")
-                        # 단순한 조건명들 처리 (실제 출력에서 나오는 패턴들)
-                        elif 'condition_3m_c1' in failed_condition or '조건1' in failed_condition:
-                            failed_msgs.append("조건1: BB200상단-BB480상단 골든크로스")
-                        elif 'condition_2' in failed_condition or '조건2' in failed_condition:
-                            # 세부 조건을 확인하여 더 구체적으로 분류
-                            if '2B' in failed_condition or 'c2b' in failed_condition:
-                                failed_msgs.append("조건2B: MA1-MA5 골든크로스")
-                            elif '2A' in failed_condition or 'c2a' in failed_condition:
-                                failed_msgs.append("조건2A: MA5-MA20 데드크로스 확인")
-                            elif '2C' in failed_condition or 'c2c' in failed_condition:
-                                failed_msgs.append("조건2C: MA5<MA20 또는 이격도 2%이내")
-                            else:
-                                failed_msgs.append("조건2: 복합 MA 조건 (2A AND 2B AND 2C)")
-                        else:
-                            # 알 수 없는 조건은 _extract_condition_description 사용
-                            condition_desc = self._extract_condition_description(failed_condition)
-                            failed_msgs.append(condition_desc)
-                    
-                    # 🎨 새로운 형식으로 표시: UB [+-2.7%] (2/3) ⚠️ 2개 조건 미충족
-                    failed_count = total_conditions - passed_count
-                    print(f"   {clean_symbol} [{change_24h:+.1f}%] ({passed_count}/{total_conditions}) ⚠️ {failed_count}개 조건 미충족")
-                    # 미충족 조건들을 상세히 표시
-                    for failed_msg in failed_msgs:
-                        print(f"\033[91m      ❌ {failed_msg}\033[0m")
-        else:
-            # 모든 전략을 개별적으로 표시 (C전략 → D전략 순서)
-            print(f"\n진입확률 [전략C: 3분봉 시세 초입 포착] (2개 조건 미충족)")
-            print("   없음")
-            print(f"\n진입확률 [전략D: 5분봉 초입 초강력 타점] (2개 조건 미충족)")
-            print("   없음")
-
-        if watchlist:
-            # 전략별로 그룹핑
-            watchlist_groups = {}
-            for result in watchlist:
-                strategy_type = result.get('strategy_type', '전략C: 3분봉 시세 초입 포착')
-                if strategy_type not in watchlist_groups:
-                    watchlist_groups[strategy_type] = []
-                watchlist_groups[strategy_type].append(result)
-
-            # 📊 미충족 조건 통계 수집
-            failed_condition_stats = {}
-
-            # 전략별로 출력 (C+D → C → D 순서)
-            strategy_order = ['전략C+D: 3분봉+5분봉 복합 진입', '전략C: 3분봉 시세 초입 포착', '전략D: 5분봉 초입 초강력 타점']
-            for strategy in strategy_order:
-                # 🚨 FIX: 하드코딩 제거하고 실제 조건 상태 표시
-                if strategy not in watchlist_groups:
-                    print(f"\n[WATCHLIST] 관심종목 [{strategy}] (조건 미충족)")
-                    print("   없음")
-                    continue
-                    
-                # 실제 조건 통계 계산
-                items = watchlist_groups[strategy]
-                failed_counts = [result.get('failed_count', 0) for result in items]
-                total_counts = [result.get('total_conditions', 3 if 'C:' in strategy else 5) for result in items]
-                
-                # 대표값 계산 (가장 많은 유형)
-                avg_failed = sum(failed_counts) / len(failed_counts) if failed_counts else 0
-                avg_total = sum(total_counts) / len(total_counts) if total_counts else (3 if 'C:' in strategy else 5)
-                
-                print(f"\n[WATCHLIST] 관심종목 [{strategy}] ({avg_failed:.0f}개 조건 미충족, 평균 {avg_total-avg_failed:.0f}/{avg_total:.0f} 통과)")
-
-                # 심볼 정보 수집
-                symbol_infos = []
-                for result in items:
-                    clean_symbol = result['symbol'].replace('/USDT:USDT', '').replace('/USDT', '')
-                    change_24h = result.get('change_24h', 0)
-                    # 문자열을 숫자로 안전하게 변환
-                    try:
-                        change_24h = float(change_24h) if change_24h != 0 else 0.0
-                    except (ValueError, TypeError):
-                        change_24h = 0.0
-                    
-                    failed_count = result.get('failed_count', 0)
-                    total_conditions = result.get('total_conditions', 11)
-                    
-                    # 문자열을 숫자로 안전하게 변환
-                    try:
-                        failed_count = int(failed_count)
-                        total_conditions = int(total_conditions)
-                    except (ValueError, TypeError):
-                        failed_count = 0
-                        total_conditions = 11
-                        
-                    # 🔧 안전한 통과 조건 계산 (음수 방지)
-                    passed_count = max(0, total_conditions - failed_count)
-
-                    # 미충족 조건 추출 (통계용)
-                    conditions = result.get('conditions', [])
-                    failed_conditions = [cond for cond in conditions if ': False' in cond]
-
-                    # 통계 수집
-                    for failed_cond in failed_conditions:
-                        cond_name = failed_cond.split(':')[0].strip()
-                        if cond_name not in failed_condition_stats:
-                            failed_condition_stats[cond_name] = 0
-                        failed_condition_stats[cond_name] += 1
-
-                    # 심볼 정보 포맷: SYMBOL(+변동률%, 통과/전체) - 음수 방지
-                    symbol_infos.append(f"{clean_symbol}({change_24h:+.1f}%, {passed_count}/{total_conditions})")
-
-                # 가로 정렬 출력 (한 줄에 5개씩)
-                for i in range(0, len(symbol_infos), 5):
-                    batch = symbol_infos[i:i+5]
-                    print(f"   {' | '.join(batch)}")
-
-            # 📊 전체 미충족 조건 통계 출력
-            if failed_condition_stats:
-                print(f"\n" + "="*60)
-                print(f"📊 관심종목 미충족 조건 통계 (상위 10개)")
-                print(f"="*60)
-
-                # 빈도순으로 정렬
-                sorted_stats = sorted(failed_condition_stats.items(), key=lambda x: x[1], reverse=True)
-
-                for idx, (cond_name, count) in enumerate(sorted_stats[:10], 1):
-                    # 조건 이름 간소화
-                    display_name = cond_name.replace('[3분봉 2번째-', '조건').replace(']', '')
-                    percentage = (count / len(watchlist)) * 100
-                    print(f"{idx:2d}. {display_name:50s} : {count:2d}회 ({percentage:5.1f}%)")
-
-                print(f"="*60)
-        else:
-            print(f"\n[WATCHLIST] 관심종목 (3~4개 조건 미충족)")
-            print("   없음")
+        # WATCHLIST 신호 출력 (헬퍼 함수 호출)
+        self._print_watchlist_signals(watchlist)
 
         # 🔍 임시 디버깅: 스캔 통계 출력
         self.logger.debug(f"📊 스캔 통계: {total_analyzed}개 분석, {results_found}개 결과, {len(all_results)}개 최종")
