@@ -225,6 +225,204 @@ except ImportError:
 import logging
 import warnings
 
+class RateLimitTracker:
+    """바이낸스 Rate Limit 가중치 추적 시스템 + 통계 수집"""
+    def __init__(self):
+        self.weight_used = 0
+        self.window_start = time.time()
+        self.max_weight = 1200  # 분당 제한 (바이낸스 기준)
+        self.warning_threshold = 0.8  # 80% 도달시 경고
+
+        # 📊 통계 수집 시스템
+        self.stats = {
+            'total_requests': 0,
+            'total_weight_used': 0,
+            'warning_count': 0,
+            'wait_count': 0,
+            'total_wait_time': 0.0,
+            'peak_weight': 0,
+            'peak_usage_pct': 0.0,
+            'start_time': time.time(),
+            'last_reset_time': time.time()
+        }
+
+        # 📈 시간대별 통계 (시간당 집계)
+        self.hourly_stats = {}  # {hour: {requests, weight, warnings}}
+
+        # 📁 통계 파일 경로
+        self.stats_file = 'rate_limit_stats.json'
+        self._load_stats()
+
+    def _load_stats(self):
+        """저장된 통계 불러오기"""
+        try:
+            if os.path.exists(self.stats_file):
+                with open(self.stats_file, 'r', encoding='utf-8') as f:
+                    saved_stats = json.load(f)
+                    # 오늘 날짜 통계만 로드
+                    today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+                    if saved_stats.get('date') == today:
+                        self.stats.update(saved_stats.get('stats', {}))
+                        self.hourly_stats = saved_stats.get('hourly_stats', {})
+        except Exception as e:
+            print(f"⚠️ Rate Limit 통계 로드 실패: {e}")
+
+    def _save_stats(self):
+        """통계 저장"""
+        try:
+            today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+            stats_data = {
+                'date': today,
+                'stats': self.stats,
+                'hourly_stats': self.hourly_stats,
+                'last_updated': datetime.now(timezone.utc).isoformat()
+            }
+            with open(self.stats_file, 'w', encoding='utf-8') as f:
+                json.dump(stats_data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"⚠️ Rate Limit 통계 저장 실패: {e}")
+
+    def add_request(self, weight=1):
+        """요청 가중치 추가"""
+        current_time = time.time()
+
+        # 1분 경과시 리셋
+        if current_time - self.window_start >= 60:
+            self.weight_used = 0
+            self.window_start = current_time
+            self.stats['last_reset_time'] = current_time
+
+        self.weight_used += weight
+
+        # 📊 통계 업데이트
+        self.stats['total_requests'] += 1
+        self.stats['total_weight_used'] += weight
+
+        # 피크 사용량 기록
+        current_usage_pct = (self.weight_used / self.max_weight) * 100
+        if self.weight_used > self.stats['peak_weight']:
+            self.stats['peak_weight'] = self.weight_used
+            self.stats['peak_usage_pct'] = current_usage_pct
+
+        # 시간대별 통계
+        current_hour = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:00')
+        if current_hour not in self.hourly_stats:
+            self.hourly_stats[current_hour] = {'requests': 0, 'weight': 0, 'warnings': 0}
+        self.hourly_stats[current_hour]['requests'] += 1
+        self.hourly_stats[current_hour]['weight'] += weight
+
+        # 80% 도달시 경고 및 대기
+        if self.weight_used >= self.max_weight * self.warning_threshold:
+            remaining_weight = self.max_weight - self.weight_used
+            print(f"⚠️ Rate Limit {self.weight_used}/{self.max_weight} ({current_usage_pct:.1f}%) - 남은 가중치: {remaining_weight}")
+
+            self.stats['warning_count'] += 1
+            if current_hour in self.hourly_stats:
+                self.hourly_stats[current_hour]['warnings'] += 1
+
+            # 90% 이상이면 10초 대기
+            if self.weight_used >= self.max_weight * 0.9:
+                print(f"🛑 Rate Limit 90% 초과 - 10초 대기")
+                self.stats['wait_count'] += 1
+                self.stats['total_wait_time'] += 10.0
+                time.sleep(10)
+                # 대기 후 리셋
+                self.weight_used = 0
+                self.window_start = time.time()
+
+        # 통계 저장 (100번 요청마다)
+        if self.stats['total_requests'] % 100 == 0:
+            self._save_stats()
+
+    def can_request(self, weight=1):
+        """요청 가능 여부 확인"""
+        current_time = time.time()
+
+        # 1분 경과시 리셋
+        if current_time - self.window_start >= 60:
+            self.weight_used = 0
+            self.window_start = current_time
+
+        # 요청 후 제한 초과 여부 확인
+        return self.weight_used + weight < self.max_weight
+
+    def wait_if_needed(self, weight=1):
+        """필요시 대기"""
+        if not self.can_request(weight):
+            wait_time = 60 - (time.time() - self.window_start)
+            if wait_time > 0:
+                print(f"⏳ Rate Limit 대기: {wait_time:.1f}초")
+                self.stats['wait_count'] += 1
+                self.stats['total_wait_time'] += wait_time
+                time.sleep(wait_time)
+                # 대기 후 리셋
+                self.weight_used = 0
+                self.window_start = time.time()
+
+    def get_stats_summary(self):
+        """통계 요약 반환"""
+        runtime = time.time() - self.stats['start_time']
+        runtime_hours = runtime / 3600
+
+        avg_weight_per_request = (self.stats['total_weight_used'] / self.stats['total_requests']
+                                  if self.stats['total_requests'] > 0 else 0)
+
+        return {
+            '총 요청 수': self.stats['total_requests'],
+            '총 가중치': self.stats['total_weight_used'],
+            '평균 가중치/요청': f"{avg_weight_per_request:.2f}",
+            '경고 횟수': self.stats['warning_count'],
+            '대기 횟수': self.stats['wait_count'],
+            '총 대기 시간': f"{self.stats['total_wait_time']:.1f}초",
+            '피크 사용량': f"{self.stats['peak_weight']}/{self.max_weight} ({self.stats['peak_usage_pct']:.1f}%)",
+            '실행 시간': f"{runtime_hours:.2f}시간",
+            '시간당 요청': f"{self.stats['total_requests']/runtime_hours:.1f}회" if runtime_hours > 0 else "0회"
+        }
+
+    def generate_daily_report(self):
+        """일일 리포트 생성"""
+        summary = self.get_stats_summary()
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+
+        report = f"""
+╔════════════════════════════════════════════════════════════╗
+║          📊 Rate Limit 일일 리포트 - {today}          ║
+╚════════════════════════════════════════════════════════════╝
+
+📈 전체 통계:
+  • 총 요청 수: {summary['총 요청 수']:,}회
+  • 총 가중치 사용: {summary['총 가중치']:,}
+  • 평균 가중치/요청: {summary['평균 가중치/요청']}
+  • 시간당 평균 요청: {summary['시간당 요청']}
+
+⚠️ 경고 및 대기:
+  • Rate Limit 경고: {summary['경고 횟수']}회
+  • 대기 발생: {summary['대기 횟수']}회
+  • 총 대기 시간: {summary['총 대기 시간']}
+
+🔥 피크 사용량:
+  • 최대 가중치: {summary['피크 사용량']}
+
+⏱️ 실행 시간:
+  • 총 실행 시간: {summary['실행 시간']}
+
+📊 시간대별 통계:
+"""
+        # 시간대별 통계 추가
+        for hour, stats in sorted(self.hourly_stats.items()):
+            report += f"  • {hour}: {stats['requests']}회 요청, {stats['weight']} 가중치"
+            if stats['warnings'] > 0:
+                report += f", ⚠️ {stats['warnings']}회 경고"
+            report += "\n"
+
+        report += "\n" + "═" * 60 + "\n"
+
+        return report
+
+    def print_stats(self):
+        """통계 출력"""
+        print(self.generate_daily_report())
+
 def get_korea_time():
     """한국 표준시(KST) 현재 시간을 반환 (UTC +9시간)"""
     return datetime.now(timezone.utc) + timedelta(hours=9)
@@ -706,7 +904,11 @@ class OneMinuteSurgeEntryStrategy:
 
         # 🕐 4시간봉 필터링 타임스탬프 추적 (동적 증분 스캔용)
         self._last_full_scan_time = 0  # 마지막 전체 스캔 시간 (timestamp)
-        
+
+        # 🛡️ Rate Limit 가중치 추적 시스템 초기화
+        self.rate_tracker = RateLimitTracker()
+        self.logger.info("🛡️ Rate Limit 추적 시스템 초기화 완료 (분당 1200 가중치)")
+
         # 📊 주문 기록 동기화 시스템 초기화
         self.order_history_sync = None
         if HAS_ORDER_HISTORY_SYNC and self.exchange and hasattr(self.exchange, 'apiKey') and self.exchange.apiKey:
@@ -8584,7 +8786,7 @@ class OneMinuteSurgeEntryStrategy:
         import time
 
         filtered_symbols = []
-        batch_size = 100
+        batch_size = 20  # 100 → 20 축소 (Rate Limit 안전성 강화)
         total_batches = (len(candidate_symbols) + batch_size - 1) // batch_size
 
         # 배치 생성
@@ -8613,7 +8815,7 @@ class OneMinuteSurgeEntryStrategy:
                     if not ohlcv or len(ohlcv) < 5:  # 최소 5개 필요 (4봉 + 1개)
                         continue
 
-                    # 조건 1: 최근 4봉 중 시가대비고가 4% 이상 급등 1회 이상
+                    # 조건 1: 최근 4봉 중 시가대비고가 3% 이상 급등 1회 이상
                     surge_found = False
                     for i in range(-4, 0):
                         candle = ohlcv[i]
@@ -8622,14 +8824,22 @@ class OneMinuteSurgeEntryStrategy:
 
                         if open_price > 0:
                             surge_pct = ((high_price - open_price) / open_price) * 100
-                            if surge_pct >= 4.0:  # 4% 급등 조건으로 수정
+                            if surge_pct >= 3.0:  # 3% 급등 조건 (문서 기준)
                                 surge_found = True
                                 break
 
-                    if surge_found:  # 4% 조건만 만족하면 통과
-                        batch_filtered.append(symbol_data)
+                    # 조건 2: 4봉 전 시가 ~ 0봉 종가 전체 상승률 0% 이상
+                    if surge_found:
+                        first_candle_open = ohlcv[-4][1]  # 4봉 전 시가
+                        last_candle_close = ohlcv[-1][4]  # 0봉 종가
 
-                    time.sleep(0.05)  # Rate Limit 방지
+                        if first_candle_open > 0:
+                            total_change_pct = ((last_candle_close - first_candle_open) / first_candle_open) * 100
+                            if total_change_pct >= 0:  # 전체 구간 0% 이상 상승이면 통과
+                                batch_filtered.append(symbol_data)
+
+                    # 🛡️ Rate Limit 보호: 0.33초 대기 (병렬 3워커 × 초당 3개 = 안전)
+                    time.sleep(0.33)
 
                 except Exception as e:
                     if "429" in str(e) or "rate limit" in str(e).lower():
@@ -8723,7 +8933,7 @@ class OneMinuteSurgeEntryStrategy:
 
         # 3. 새로운 심볼들의 동적 범위 검사
         new_filtered = []
-        batch_size = 50  # 배치 크기
+        batch_size = 20  # 배치 크기 (50 → 20 축소, Rate Limit 안전성 강화)
         total_batches = (len(new_symbols) + batch_size - 1) // batch_size
 
         def process_incremental_batch(batch_data):
@@ -8746,7 +8956,7 @@ class OneMinuteSurgeEntryStrategy:
                     # candles_to_check 개수만큼만 검사 (최신 봉부터)
                     check_start = -candles_to_check
 
-                    # 조건 1: 최근 N봉 중 시가대비고가 4% 이상 급등 1회 이상
+                    # 조건 1: 최근 N봉 중 시가대비고가 3% 이상 급등 1회 이상
                     surge_found = False
                     for i in range(check_start, 0):
                         candle = ohlcv[i]
@@ -8755,16 +8965,24 @@ class OneMinuteSurgeEntryStrategy:
 
                         if open_price > 0:
                             surge_pct = ((high_price - open_price) / open_price) * 100
-                            if surge_pct >= 4.0:  # 4% 급등 조건으로 수정
+                            if surge_pct >= 3.0:  # 3% 급등 조건 (문서 기준)
                                 surge_found = True
                                 break
 
-                    if surge_found:  # 4% 조건만 만족하면 통과
-                        batch_filtered.append(symbol_data)
-                        # 캐시에 추가
-                        cache['passed_symbols'].add(symbol)
+                    # 조건 2: 4봉 전 시가 ~ 0봉 종가 전체 상승률 0% 이상
+                    if surge_found:
+                        first_candle_open = ohlcv[-4][1]  # 4봉 전 시가 (index -4)
+                        last_candle_close = ohlcv[-1][4]  # 0봉 종가 (index -1)
 
-                    time.sleep(0.02)  # 더 짧은 딜레이
+                        if first_candle_open > 0:
+                            total_change_pct = ((last_candle_close - first_candle_open) / first_candle_open) * 100
+                            if total_change_pct >= 0:  # 전체 구간 0% 이상 상승이면 통과
+                                batch_filtered.append(symbol_data)
+                                # 캐시에 추가
+                                cache['passed_symbols'].add(symbol)
+
+                    # 🛡️ Rate Limit 보호: 0.33초 대기 (병렬 처리 고려 안전 속도)
+                    time.sleep(0.33)
 
                 except Exception as e:
                     if "429" in str(e) or "rate limit" in str(e).lower():
@@ -9025,11 +9243,11 @@ class OneMinuteSurgeEntryStrategy:
             try:
                 # REST API로 4시간봉 데이터 조회
                 api_4h_data = self.get_ohlcv_data(ws_symbol, '4h', 10)
-                
+
                 if api_4h_data is not None and len(api_4h_data) >= 4:
                     symbols_with_4h_data += 1
                     symbols_with_sufficient_candles += 1
-                    
+
                     # DataFrame을 kline 형태로 변환
                     kline_4h = []
                     for idx, row in api_4h_data.iterrows():
@@ -9040,20 +9258,23 @@ class OneMinuteSurgeEntryStrategy:
                             'close': float(row['close']),
                             'volume': float(row['volume'])
                         })
-                    
+
                     # WebSocket 버퍼에 캐시
                     buffer_key_4h = f"{ws_symbol}_4h"
                     if hasattr(self, '_websocket_kline_buffer'):
                         self._websocket_kline_buffer[buffer_key_4h] = kline_4h
-                    
+
                     # Surge 조건 확인
                     recent_4_candles = kline_4h[-4:]
                     if self._check_4h_surge_condition(recent_4_candles):
                         symbols_passed_surge_check += 1
                         filtered_symbols.append((symbol, change_pct, volume_24h))
-                        
+
             except Exception as api_e:
-                continue
+                pass  # 에러 발생 시 해당 심볼 스킵
+
+            # 🛡️ Rate Limit 보호: 종목마다 0.33초 대기 (초당 3종목 안전 속도)
+            time.sleep(0.33)
         
         return (filtered_symbols, symbols_with_4h_data, symbols_with_sufficient_candles, symbols_passed_surge_check)
 
@@ -9188,9 +9409,37 @@ class OneMinuteSurgeEntryStrategy:
             # 에러 발생시 빈 리스트 반환 (더 이상 전체 통과하지 않음)
             return []
 
+    def _check_rate_limit_before_scan(self):
+        """스캔 전 Rate Limit 여유 확인"""
+        try:
+            # 가벼운 테스트 호출
+            test_ticker = self.exchange.fetch_ticker('BTC/USDT:USDT')
+            if test_ticker:
+                return True  # 정상
+        except Exception as e:
+            error_str = str(e).lower()
+            if "418" in str(e) or "429" in str(e) or "rate limit" in error_str or "too many requests" in error_str:
+                print("🚨 Rate Limit 감지 - 스캔 연기")
+                self._api_rate_limited = True
+                self._last_rate_limit_check = time.time()
+                return False  # 차단됨
+            # 다른 에러는 정상으로 간주
+        return True
+
     def get_filtered_symbols(self, min_change_pct=1.0):  # 8% → 2% → 1%로 완화
         """WebSocket 전용 심볼 필터링 - REST API 완전 금지"""
         try:
+            # 🛡️ Rate Limit 사전 체크 (REST API 사용 전)
+            if not self._check_rate_limit_before_scan():
+                print("⏳ Rate Limit 감지 - WebSocket 전용 모드로 전환")
+                # WebSocket 데이터만 사용
+                websocket_symbols = self._get_websocket_filtered_symbols()
+                if websocket_symbols:
+                    return websocket_symbols
+                else:
+                    print("❌ WebSocket 데이터 없음 - 1분 대기 후 재시도 권장")
+                    return []
+
             # Rate limit 상태에서도 전체 심볼 필터링 수행 (주요 심볼 우선 제거)
             if hasattr(self, '_api_rate_limited') and self._api_rate_limited:
                 print("🚨 Rate limit 모드 - WebSocket 데이터만 사용한 전체 심볼 필터링")
@@ -9275,8 +9524,14 @@ class OneMinuteSurgeEntryStrategy:
 
                     # 오늘 09:00 이후 변동률 계산 (1시간봉 사용)
                     try:
+                        # 🛡️ Rate Limit 체크 및 대기
+                        self.rate_tracker.wait_if_needed(weight=5)
+
                         hours_since_9am = int((datetime.now(timezone.utc).timestamp() * 1000 - since_timestamp) / (1000 * 3600)) + 2
                         ohlcv = self.exchange.fetch_ohlcv(symbol, '1h', limit=min(hours_since_9am, 24))
+
+                        # 🛡️ API 호출 가중치 기록
+                        self.rate_tracker.add_request(weight=5)
 
                         if ohlcv and len(ohlcv) > 0:
                             # 09:00 시각에 가장 가까운 캔들 찾기
@@ -9314,7 +9569,7 @@ class OneMinuteSurgeEntryStrategy:
                     if idx < 3:
                         print(f"   🔍 [{symbol}] 현재가: ${current_price:.2f}, 09:00 이후 변동률: {change_pct_since_9am:.2f}%")
 
-                    time.sleep(0.02)  # Rate limit 방지 (500개 처리용)
+                    time.sleep(0.1)  # Rate limit 방지 (20ms → 100ms 증가)
 
                 # 📊 09:00 이후 변동률 통계
                 positive_count = sum(1 for _, change, _, _ in candidate_symbols if change > 0)
@@ -9341,13 +9596,13 @@ class OneMinuteSurgeEntryStrategy:
                 print(f"⚠️ 전체 티커 조회 실패, 배치 처리로 전환: {e}")
 
                 # 배치 처리로 fallback (Rate Limit 아닌 경우만)
-                batch_size = 50  # 100 → 50으로 배치 크기 축소
+                batch_size = 20  # 50 → 20으로 배치 크기 축소 (Rate Limit 안전성 강화)
                 for i in range(0, len(usdt_symbols), batch_size):
                     # Rate Limit 재확인
                     if hasattr(self, '_api_rate_limited') and self._api_rate_limited:
                         print("🚨 배치 처리 중 Rate Limit 감지 - 중단")
                         break
-                        
+
                     batch_symbols = usdt_symbols[i:i+batch_size]
 
                     try:
@@ -9359,7 +9614,7 @@ class OneMinuteSurgeEntryStrategy:
                                 volume_24h = ticker.get('quoteVolume', 0) or 0
                                 candidate_symbols.append((symbol, change_pct, volume_24h, ticker))
 
-                        time.sleep(0.2)  # 0.1 → 0.2초로 대기 시간 증가
+                        time.sleep(1.0)  # 0.2 → 1.0초로 대기 시간 증가 (배치 간 충분한 회복 시간)
 
                     except Exception as e:
                         # 배치 처리 중 Rate Limit 감지
@@ -9435,66 +9690,122 @@ class OneMinuteSurgeEntryStrategy:
             return []
     
     def _get_websocket_filtered_symbols(self):
-        """WebSocket 데이터만 사용한 심볼 필터링"""
+        """WebSocket 데이터만 사용한 심볼 필터링 + 신뢰도 기반 품질 검증"""
         try:
             if not hasattr(self, '_websocket_kline_buffer') or not self._websocket_kline_buffer:
                 print("⚠️ WebSocket 버퍼가 비어있음")
                 return []
-            
+
             print(f"📡 WebSocket 버퍼 심볼: {len(self._websocket_kline_buffer)}개")
-            
+
             # WebSocket 버퍼에서 1분봉 데이터가 있는 심볼들 추출
             candidate_symbols = []
+            quality_stats = {'total': 0, 'passed': 0, 'low_quality': 0, 'insufficient_data': 0}
+
             for buffer_key, kline_data in self._websocket_kline_buffer.items():
-                if '_1m' in buffer_key and len(kline_data) >= 3:  # 1분봉 데이터 조건 더욱 완화 (10개→3개)
-                    symbol = buffer_key.replace('_1m', '')
-                    
-                    # 안전한 가격 데이터 추출 (인덱스 오류 방지)
-                    try:
-                        # 최근 24시간 변동률 계산 (1440개 1분봉으로 근사)
-                        if len(kline_data) >= 1440 and len(kline_data[-1]) > 4 and len(kline_data[-1440]) > 4:
-                            current_price = float(kline_data[-1][4])  # 최신 종가
-                            day_ago_price = float(kline_data[-1440][4])  # 24시간 전 종가
-                            if day_ago_price > 0:
-                                change_pct = ((current_price - day_ago_price) / day_ago_price) * 100
-                            else:
-                                change_pct = 0.0
-                        else:
-                            # 데이터가 부족하면 가용한 모든 데이터로 변동률 추정
-                            if len(kline_data) > 0 and len(kline_data[-1]) > 4:
-                                current_price = float(kline_data[-1][4])
-                                if len(kline_data[0]) > 4:
-                                    old_price = float(kline_data[0][4])
-                                else:
-                                    old_price = current_price
-                                
-                                if old_price > 0:
-                                    change_pct = ((current_price - old_price) / old_price) * 100
-                                else:
-                                    change_pct = 0.0
-                            else:
-                                # 데이터 형식이 올바르지 않으면 건너뛰기
-                                continue
-                    except (IndexError, ValueError, TypeError) as data_error:
-                        # 데이터 형식 오류시 해당 심볼 건너뛰기
+                if '_1m' not in buffer_key:
+                    continue
+
+                quality_stats['total'] += 1
+
+                # 🔍 품질 검증 1: 최소 데이터 수 (3개 → 10개로 강화)
+                if len(kline_data) < 10:
+                    quality_stats['insufficient_data'] += 1
+                    continue
+
+                symbol = buffer_key.replace('_1m', '')
+
+                # 안전한 가격 데이터 추출 (인덱스 오류 방지)
+                try:
+                    # 🔍 품질 검증 2: 데이터 구조 유효성 (최근 10개 캔들 검증)
+                    valid_candles = 0
+                    for i in range(-10, 0):
+                        try:
+                            if len(kline_data[i]) >= 6:  # [timestamp, open, high, low, close, volume]
+                                valid_candles += 1
+                        except (IndexError, TypeError):
+                            pass
+
+                    # 10개 중 최소 8개 이상 유효해야 통과 (80% 신뢰도)
+                    if valid_candles < 8:
+                        quality_stats['low_quality'] += 1
                         continue
-                    
-                    # 기본 거래량 (정확한 24h 거래량은 ticker에서만 가능)
-                    try:
-                        available_candles = min(len(kline_data), 100)
-                        volume_24h = 0
-                        for candle in kline_data[-available_candles:]:
-                            if len(candle) > 5:
-                                volume_24h += float(candle[5])  # 안전한 거래량 접근
-                    except (IndexError, ValueError, TypeError):
-                        volume_24h = 1000000  # 기본값
-                    
-                    candidate_symbols.append((symbol, change_pct, volume_24h))
-            
+
+                    # 최근 24시간 변동률 계산 (1440개 1분봉으로 근사)
+                    if len(kline_data) >= 1440 and len(kline_data[-1]) > 4 and len(kline_data[-1440]) > 4:
+                        current_price = float(kline_data[-1][4])  # 최신 종가
+                        day_ago_price = float(kline_data[-1440][4])  # 24시간 전 종가
+
+                        # 🔍 품질 검증 3: 가격 데이터 이상치 확인
+                        if current_price <= 0 or day_ago_price <= 0:
+                            quality_stats['low_quality'] += 1
+                            continue
+
+                        # 🔍 품질 검증 4: 급격한 가격 변동 (>1000%) 이상치 제거
+                        price_change = abs((current_price - day_ago_price) / day_ago_price)
+                        if price_change > 10.0:  # 1000% 이상 변동은 데이터 오류 가능성
+                            quality_stats['low_quality'] += 1
+                            continue
+
+                        change_pct = ((current_price - day_ago_price) / day_ago_price) * 100
+                    else:
+                        # 데이터가 부족하면 가용한 모든 데이터로 변동률 추정
+                        if len(kline_data) > 0 and len(kline_data[-1]) > 4:
+                            current_price = float(kline_data[-1][4])
+                            if len(kline_data[0]) > 4:
+                                old_price = float(kline_data[0][4])
+                            else:
+                                old_price = current_price
+
+                            # 가격 유효성 검증
+                            if old_price <= 0 or current_price <= 0:
+                                quality_stats['low_quality'] += 1
+                                continue
+
+                            change_pct = ((current_price - old_price) / old_price) * 100
+                        else:
+                            # 데이터 형식이 올바르지 않으면 건너뛰기
+                            quality_stats['low_quality'] += 1
+                            continue
+
+                except (IndexError, ValueError, TypeError) as data_error:
+                    # 데이터 형식 오류시 해당 심볼 건너뛰기
+                    quality_stats['low_quality'] += 1
+                    continue
+
+                # 기본 거래량 (정확한 24h 거래량은 ticker에서만 가능)
+                try:
+                    available_candles = min(len(kline_data), 100)
+                    volume_24h = 0
+                    for candle in kline_data[-available_candles:]:
+                        if len(candle) > 5:
+                            volume_24h += float(candle[5])  # 안전한 거래량 접근
+
+                    # 🔍 품질 검증 5: 거래량 최소값 (너무 낮은 거래량 제외)
+                    if volume_24h < 100:  # 최소 거래량 기준
+                        quality_stats['low_quality'] += 1
+                        continue
+
+                except (IndexError, ValueError, TypeError):
+                    volume_24h = 1000000  # 기본값
+
+                # ✅ 모든 품질 검증 통과
+                quality_stats['passed'] += 1
+                candidate_symbols.append((symbol, change_pct, volume_24h))
+
+            # 📊 품질 통계 출력
+            if quality_stats['total'] > 0:
+                pass_rate = (quality_stats['passed'] / quality_stats['total']) * 100
+                print(f"📊 WebSocket 데이터 품질 검증:")
+                print(f"   • 총 심볼: {quality_stats['total']}개")
+                print(f"   • 통과: {quality_stats['passed']}개 ({pass_rate:.1f}%)")
+                print(f"   • 데이터 부족: {quality_stats['insufficient_data']}개")
+                print(f"   • 품질 미달: {quality_stats['low_quality']}개")
+
             if not candidate_symbols:
-                print("⚠️ WebSocket에서 유효한 심볼 데이터 없음")
+                print("⚠️ WebSocket 품질 검증 통과 심볼 없음")
                 return []
-            
+
             # WebSocket 후보 심볼 처리 (조용한 스캔)
             
             # 2시간봉 필터링 (최적화된 버전 사용)
