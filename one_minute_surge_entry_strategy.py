@@ -231,7 +231,7 @@ class RateLimitTracker:
         self.weight_used = 0
         self.window_start = time.time()
         self.max_weight = 1200  # 분당 제한 (바이낸스 기준)
-        self.warning_threshold = 0.75  # 75% 도달시 경고 (더 안전하게)
+        self.warning_threshold = 0.60  # 60% 도달시 경고 (IP 밴 절대 방지!)
 
         # 📊 통계 수집 시스템
         self.stats = {
@@ -320,12 +320,12 @@ class RateLimitTracker:
             if current_hour in self.hourly_stats:
                 self.hourly_stats[current_hour]['warnings'] += 1
 
-            # 80% 이상이면 15초 대기 (더 안전하게)
-            if self.weight_used >= self.max_weight * 0.8:
-                print(f"🛑 Rate Limit 80% 초과 - 15초 대기")
+            # 60% 이상이면 30초 대기 (IP 밴 절대 방지!)
+            if self.weight_used >= self.max_weight * 0.6:
+                print(f"🛑 Rate Limit 60% 초과 - 30초 대기 (안전 최우선)")
                 self.stats['wait_count'] += 1
-                self.stats['total_wait_time'] += 15.0
-                time.sleep(15)
+                self.stats['total_wait_time'] += 30.0
+                time.sleep(30)
                 # 대기 후 리셋
                 self.weight_used = 0
                 self.window_start = time.time()
@@ -1363,10 +1363,42 @@ class OneMinuteSurgeEntryStrategy:
             if hasattr(self, '_api_rate_limited') and self._api_rate_limited:
                 return None
             
-            # 🚨 REST API 완전 차단 - IP 밴 방지 최우선!
-            # WebSocket 데이터가 없으면 그냥 None 반환
-            self.logger.debug(f"WebSocket 데이터 없음 - REST API 차단됨 (IP 밴 방지): {symbol} {timeframe}")
-            return None
+            # 🔄 하이브리드 모드: WebSocket 부족 시 REST API 폴백 (Rate Limit 강화!)
+            # 60% 미만일 때만 REST API 사용 허용
+            if hasattr(self, 'rate_tracker'):
+                current_usage = (self.rate_tracker.weight_used / self.rate_tracker.max_weight) * 100
+                if current_usage >= 50:  # 50% 넘으면 REST API 차단!
+                    self.logger.debug(f"Rate Limit {current_usage:.1f}% - REST API 차단: {symbol} {timeframe}")
+                    return None
+
+            try:
+                # Rate Limit 체크 및 대기
+                if hasattr(self, 'rate_tracker'):
+                    self.rate_tracker.wait_if_needed(weight=2)
+
+                # REST API로 데이터 가져오기 (캐시 효율)
+                self.logger.debug(f"WebSocket 데이터 부족 - REST API 폴백: {symbol} {timeframe}")
+                fetch_limit = max(limit, 500)  # 2000 → 500 (더 적게)
+                ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=fetch_limit)
+
+                # Rate Limit 기록
+                if hasattr(self, 'rate_tracker'):
+                    self.rate_tracker.add_request(weight=2)
+
+                if ohlcv and len(ohlcv) >= 10:
+                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+
+                    # 캐시 저장
+                    if not hasattr(self, '_ohlcv_cache'):
+                        self._ohlcv_cache = {}
+                    self._ohlcv_cache[cache_key] = (df, current_time)
+                    return df
+                else:
+                    return None
+            except Exception as api_e:
+                self.logger.debug(f"REST API 폴백 실패: {symbol} {timeframe} - {api_e}")
+                return None
 
         except Exception as e:
             self.logger.error(f"{symbol} {timeframe} 데이터 조회 실패: {e}")
@@ -1721,7 +1753,7 @@ class OneMinuteSurgeEntryStrategy:
                     self.ws_kline_manager.subscribe_batch(
                         symbols=[ws_symbol],
                         timeframes=['3m', '5m', '15m', '1d'],
-                        load_history=False  # Rate Limit 방지
+                        load_history=True  # 하이브리드: 초기 히스토리 로드
                     )
 
                     self._write_debug_log(f"[{symbol.replace('/USDT:USDT', '')}] WebSocket 구독 및 초기 히스토리 로드 완료 ({timeframe})")
@@ -1818,10 +1850,10 @@ class OneMinuteSurgeEntryStrategy:
                             self.ws_kline_manager.subscribe_batch(
                                 symbols=batch_symbols,
                                 timeframes=['3m', '5m', '15m', '1d'],
-                                load_history=False,  # ❌ 히스토리 로드 비활성화 (Rate Limit 방지!)
-                                batch_size=50,       # 75 → 50 (API 요청 감소)
-                                delay=2.0,           # 배치 간 2.0초 대기 (Rate Limit 방지)
-                                max_workers=3        # 10 → 3 (동시 요청 대폭 감소)
+                                load_history=True,   # ✅ 하이브리드: 초기만 REST API (IP 밴 방지 설정!)
+                                batch_size=10,       # 50 → 10 (극도로 안전하게)
+                                delay=10.0,          # 2.0 → 10.0초 (IP 밴 절대 방지!)
+                                max_workers=1        # 3 → 1 (한 번에 1개씩만!)
                             )
                             subscribed_count += len(batch_symbols)
                             print(f"   ✅ 배치 {batch_idx + 1}/{total_batches} 완료 ({subscribed_count}/{total_symbols}개)")
@@ -3219,7 +3251,7 @@ class OneMinuteSurgeEntryStrategy:
                         self.ws_kline_manager.subscribe_batch(
                             symbols=[ws_symbol],
                             timeframes=['1m', '3m', '5m', '15m', '1d'],
-                            load_history=False  # Rate Limit 방지
+                            load_history=True  # 하이브리드: 초기 히스토리 로드
                         )
 
                         # 구독 추적에 추가
@@ -8670,24 +8702,24 @@ class OneMinuteSurgeEntryStrategy:
         try:
             print(f"🚀 통합 필터링 (Top200 → 15m Surge): {len(candidate_symbols)}개 심볼")
 
-            # 1단계: 상승률 상위 200위권 추출 (더 넓은 범위)
-            print("📊 1단계: 상승률 상위 200위권 추출")
+            # 1단계: 상승률 상위 100위권 추출 (IP 밴 방지를 위해 축소!)
+            print("📊 1단계: 상승률 상위 100위권 추출 (IP 밴 방지)")
             candidate_symbols.sort(key=lambda x: x[1], reverse=True)
-            top200_filtered = candidate_symbols[:200] if len(candidate_symbols) >= 200 else candidate_symbols
-            top200_count = len(top200_filtered)
-            print(f"✅ Top200 추출 완료: {top200_count}개 심볼")
+            top100_filtered = candidate_symbols[:100] if len(candidate_symbols) >= 100 else candidate_symbols
+            top100_count = len(top100_filtered)
+            print(f"✅ Top100 추출 완료: {top100_count}개 심볼 (안전 최우선)")
 
-            if not top200_filtered:
-                print("⚠️ Top200 추출 실패")
+            if not top100_filtered:
+                print("⚠️ Top100 추출 실패")
                 return []
 
             # ⚡ 최적화: Stage 2-4 제거 (15m 데이터는 WebSocket 실시간 구독으로 자동 수집)
-            # - Stage 2: 불필요한 load_history=True REST API 호출 제거 (200 symbols × 0.5-2s = 1.6-6.6분)
+            # - Stage 2: 불필요한 load_history=True REST API 호출 제거 (100 symbols × 0.5-2s = 0.8-3.3분)
             # - Stage 3: 항상 0개 반환하는 15m Surge 필터 제거
-            # - Stage 4: 불필요한 결과 조합 로직 제거 (top200_filtered를 그대로 반환하므로 의미 없음)
+            # - Stage 4: 불필요한 결과 조합 로직 제거 (top100_filtered를 그대로 반환하므로 의미 없음)
             print("ℹ️ 15m 데이터는 WebSocket 구독으로 실시간 수집됩니다 (즉시 반환)")
 
-            return top200_filtered
+            return top100_filtered
             
         except Exception as e:
             print(f"⚠️ 통합 필터링 오류: {e}")
