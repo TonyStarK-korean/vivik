@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 """
 Binance WebSocket User Data Stream
-계좌 포지션 실시간 업데이트 (REST API 완전 대체)
+Real-time account position updates (Complete REST API replacement)
 
-기능:
-- 실시간 포지션 변경 추적 (진입/청산)
-- 실시간 잔고 업데이트
-- 주문 체결/취소 알림
-- Rate Limit 0% (WebSocket만 사용)
+Features:
+- Real-time position change tracking (entry/exit)
+- Real-time balance updates
+- Order fill/cancel notifications
+- Rate Limit 0% (WebSocket only)
 
-바이낸스 User Data Stream:
-- Listen Key 기반 인증 (60분마다 갱신)
-- 포지션/잔고/주문 실시간 이벤트
-- REST API 대비 99% Rate Limit 절감
+Binance User Data Stream:
+- Listen Key-based authentication (refresh every 60 minutes)
+- Real-time position/balance/order events
+- 99% Rate Limit reduction compared to REST API
 """
 
 import time
@@ -69,7 +69,7 @@ class BinanceUserDataStream:
             'reconnections': 0
         }
 
-        self.logger.info("🔐 WebSocket User Data Stream 초기화 완료")
+        self.logger.info("[INIT] WebSocket User Data Stream initialized")
 
     def _create_listen_key(self) -> Optional[str]:
         """Listen Key 생성 (60분 유효)"""
@@ -83,11 +83,11 @@ class BinanceUserDataStream:
             data = response.json()
             listen_key = data.get('listenKey')
 
-            self.logger.info(f"✅ Listen Key 생성 성공: {listen_key[:10]}...")
+            self.logger.info(f"[OK] Listen Key created: {listen_key[:10]}...")
             return listen_key
 
         except Exception as e:
-            self.logger.error(f"❌ Listen Key 생성 실패: {e}")
+            self.logger.error(f"[ERROR] Listen Key creation failed: {e}")
             return None
 
     def _refresh_listen_key(self):
@@ -102,11 +102,11 @@ class BinanceUserDataStream:
             response = requests.put(url, headers=headers, timeout=10)
             response.raise_for_status()
 
-            self.logger.info("✅ Listen Key 갱신 성공")
+            self.logger.info("[OK] Listen Key refreshed")
             self.listen_key_created_at = time.time()
 
         except Exception as e:
-            self.logger.error(f"❌ Listen Key 갱신 실패: {e}")
+            self.logger.error(f"[ERROR] Listen Key refresh failed: {e}")
 
     def _handle_account_update(self, data: Dict):
         """ACCOUNT_UPDATE 이벤트 처리 (포지션/잔고 변경)"""
@@ -135,9 +135,9 @@ class BinanceUserDataStream:
                 }
 
                 self.stats['position_updates'] += 1
-                self.logger.info(f"📊 [포지션] {symbol}: {position_amount:.4f} @ {entry_price:.2f} (PnL: {unrealized_pnl:.2f})")
+                self.logger.info(f"[POSITION] {symbol}: {position_amount:.4f} @ {entry_price:.2f} (PnL: {unrealized_pnl:.2f})")
 
-                # 콜백 실행
+                # Execute callback
                 if self.position_callback:
                     self.position_callback(symbol, self.positions[symbol])
 
@@ -156,14 +156,14 @@ class BinanceUserDataStream:
                 }
 
                 self.stats['balance_updates'] += 1
-                self.logger.info(f"💰 [잔고] {asset}: {wallet_balance:.2f} (사용가능: {available_balance:.2f})")
+                self.logger.info(f"[BALANCE] {asset}: {wallet_balance:.2f} (Available: {available_balance:.2f})")
 
-                # 콜백 실행
+                # Execute callback
                 if self.balance_callback:
                     self.balance_callback(asset, self.balance[asset])
 
         except Exception as e:
-            self.logger.error(f"❌ ACCOUNT_UPDATE 처리 실패: {e}")
+            self.logger.error(f"[ERROR] ACCOUNT_UPDATE processing failed: {e}")
 
     def _handle_order_update(self, data: Dict):
         """ORDER_TRADE_UPDATE 이벤트 처리 (주문 체결/취소)"""
@@ -196,17 +196,17 @@ class BinanceUserDataStream:
             }
 
             self.stats['order_updates'] += 1
-            self.logger.info(f"📝 [주문] {symbol} {side} {status}: {filled_quantity}/{quantity} @ {avg_price:.2f}")
+            self.logger.info(f"[ORDER] {symbol} {side} {status}: {filled_quantity}/{quantity} @ {avg_price:.2f}")
 
-            # 콜백 실행
+            # Execute callback
             if self.order_callback:
                 self.order_callback(order_id, self.orders[str(order_id)])
 
         except Exception as e:
-            self.logger.error(f"❌ ORDER_TRADE_UPDATE 처리 실패: {e}")
+            self.logger.error(f"[ERROR] ORDER_TRADE_UPDATE processing failed: {e}")
 
     def _on_message(self, ws, message):
-        """WebSocket 메시지 수신 처리"""
+        """WebSocket message handler"""
         try:
             data = json.loads(message)
             event_type = data.get('e')
@@ -218,32 +218,32 @@ class BinanceUserDataStream:
                 self._handle_order_update(data)
 
         except Exception as e:
-            self.logger.error(f"❌ WebSocket 메시지 처리 실패: {e}")
+            self.logger.error(f"[ERROR] WebSocket message processing failed: {e}")
 
     def _on_error(self, ws, error):
-        """WebSocket 에러 처리"""
-        self.logger.error(f"❌ WebSocket 에러: {error}")
+        """WebSocket error handler"""
+        self.logger.error(f"[ERROR] WebSocket error: {error}")
 
     def _on_close(self, ws, close_status_code, close_msg):
-        """WebSocket 연결 종료"""
-        self.logger.warning(f"⚠️ WebSocket 연결 종료: {close_status_code} - {close_msg}")
+        """WebSocket connection closed"""
+        self.logger.warning(f"[WARNING] WebSocket closed: {close_status_code} - {close_msg}")
 
     def _on_open(self, ws):
-        """WebSocket 연결 성공"""
-        self.logger.info("✅ WebSocket User Data Stream 연결 성공")
+        """WebSocket connection opened"""
+        self.logger.info("[OK] WebSocket User Data Stream connected")
 
     def start(self):
-        """WebSocket User Data Stream 시작"""
+        """Start WebSocket User Data Stream"""
         try:
-            # 1. Listen Key 생성
+            # 1. Create Listen Key
             self.listen_key = self._create_listen_key()
             if not self.listen_key:
-                self.logger.error("❌ Listen Key 생성 실패 - User Data Stream 시작 불가")
+                self.logger.error("[ERROR] Listen Key creation failed - Cannot start User Data Stream")
                 return False
 
             self.listen_key_created_at = time.time()
 
-            # 2. WebSocket 연결
+            # 2. Connect WebSocket
             import websocket
             ws_url = f"wss://fstream.binance.com/ws/{self.listen_key}"
 
@@ -257,19 +257,19 @@ class BinanceUserDataStream:
 
             self.running = True
 
-            # 3. WebSocket 백그라운드 실행
+            # 3. Run WebSocket in background
             def run_ws():
                 while self.running:
                     try:
                         self.ws.run_forever()
                     except Exception as e:
-                        self.logger.error(f"WebSocket 실행 실패: {e}")
+                        self.logger.error(f"[ERROR] WebSocket run failed: {e}")
                         time.sleep(5)
 
             self.ws_thread = threading.Thread(target=run_ws, daemon=True)
             self.ws_thread.start()
 
-            # 4. Listen Key 갱신 스레드
+            # 4. Listen Key refresh thread
             def refresh_listen_key_loop():
                 while self.running:
                     time.sleep(self.listen_key_refresh_interval)
@@ -278,46 +278,46 @@ class BinanceUserDataStream:
             refresh_thread = threading.Thread(target=refresh_listen_key_loop, daemon=True)
             refresh_thread.start()
 
-            self.logger.info("✅ User Data Stream 시작 완료")
+            self.logger.info("[OK] User Data Stream started")
             return True
 
         except Exception as e:
-            self.logger.error(f"❌ User Data Stream 시작 실패: {e}")
+            self.logger.error(f"[ERROR] User Data Stream start failed: {e}")
             return False
 
     def stop(self):
-        """WebSocket User Data Stream 종료"""
+        """Stop WebSocket User Data Stream"""
         try:
             self.running = False
 
             if self.ws:
                 self.ws.close()
 
-            # Listen Key 삭제
+            # Delete Listen Key
             if self.listen_key:
                 url = f"{self.base_url}/fapi/v1/listenKey"
                 headers = {'X-MBX-APIKEY': self.api_key}
                 requests.delete(url, headers=headers, timeout=10)
 
-            self.logger.info("✅ User Data Stream 종료 완료")
+            self.logger.info("[OK] User Data Stream stopped")
 
         except Exception as e:
-            self.logger.error(f"❌ User Data Stream 종료 실패: {e}")
+            self.logger.error(f"[ERROR] User Data Stream stop failed: {e}")
 
     def get_position(self, symbol: str) -> Optional[Dict]:
-        """실시간 포지션 조회 (REST API 대체)"""
+        """Get real-time position (replaces REST API)"""
         return self.positions.get(symbol)
 
     def get_all_positions(self) -> List[Dict]:
-        """모든 포지션 조회 (REST API 대체)"""
+        """Get all positions (replaces REST API)"""
         return [pos for pos in self.positions.values() if pos.get('contracts', 0) > 0]
 
     def get_balance(self, asset: str = 'USDT') -> Optional[Dict]:
-        """실시간 잔고 조회 (REST API 대체)"""
+        """Get real-time balance (replaces REST API)"""
         return self.balance.get(asset)
 
     def get_stats(self) -> Dict:
-        """통계 조회"""
+        """Get statistics"""
         return {
             **self.stats,
             'total_positions': len(self.positions),

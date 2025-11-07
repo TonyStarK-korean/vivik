@@ -1,123 +1,123 @@
 #!/bin/bash
-# VPS 자동 업데이트 스크립트
+# VPS Auto-Update Script
 #
-# 사용법:
-# VPS에 SSH 접속 후 실행:
+# Usage:
+# After SSH to VPS, run:
 #   cd ~/vivik && bash update_vps.sh
 
-set -e  # 에러 발생시 중단
+set -e  # Exit on error
 
 echo "======================================================"
-echo "VPS 자동 업데이트 시작"
+echo "VPS Auto-Update Started"
 echo "======================================================"
 
-# 1. 현재 디렉토리 확인
+# 1. Check current directory
 if [ ! -f "one_minute_surge_entry_strategy.py" ]; then
-    echo "❌ 에러: 프로젝트 디렉토리가 아닙니다."
-    echo "cd ~/vivik 실행 후 다시 시도하세요."
+    echo "[ERROR] Not in project directory"
+    echo "Please run: cd ~/vivik"
     exit 1
 fi
 
-echo "[1/5] 현재 디렉토리: $(pwd)"
+echo "[1/5] Current directory: $(pwd)"
 
-# 2. 실행 중인 봇 확인
+# 2. Check running bot
 echo ""
-echo "[2/5] 실행 중인 봇 확인..."
+echo "[2/5] Checking running bot..."
 if pgrep -f "one_minute_surge_entry_strategy.py" > /dev/null; then
-    echo "⚠️  봇이 실행 중입니다. 중지하시겠습니까? (y/N)"
+    echo "[WARNING] Bot is running. Stop it? (y/N)"
     read -r response
     if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-        echo "봇 중지 중..."
+        echo "Stopping bot..."
         pkill -f one_minute_surge_entry_strategy.py || true
         sleep 2
-        echo "✅ 봇 중지 완료"
+        echo "[OK] Bot stopped"
     else
-        echo "❌ 업데이트를 취소합니다."
+        echo "[CANCELLED] Update cancelled"
         exit 0
     fi
 else
-    echo "✅ 실행 중인 봇 없음"
+    echo "[OK] No running bot"
 fi
 
-# 3. Git pull로 최신 코드 가져오기
+# 3. Pull latest code
 echo ""
-echo "[3/5] 최신 코드 가져오기..."
+echo "[3/5] Pulling latest code..."
 git fetch origin main
 git pull origin main
 
 if [ $? -eq 0 ]; then
-    echo "✅ 코드 업데이트 완료"
+    echo "[OK] Code updated"
 else
-    echo "❌ Git pull 실패"
+    echo "[ERROR] Git pull failed"
     exit 1
 fi
 
-# 4. 새로 추가된 파일 확인
+# 4. Check new files
 echo ""
-echo "[4/5] 새로 추가된 파일 확인..."
+echo "[4/5] Checking new files..."
 if [ -f "websocket_user_data_stream.py" ]; then
-    echo "✅ websocket_user_data_stream.py 발견"
+    echo "[OK] websocket_user_data_stream.py found"
 else
-    echo "⚠️  websocket_user_data_stream.py 없음"
+    echo "[WARNING] websocket_user_data_stream.py not found"
 fi
 
 if [ -f "apply_websocket_user_data_stream.py" ]; then
-    echo "✅ apply_websocket_user_data_stream.py 발견"
+    echo "[OK] apply_websocket_user_data_stream.py found"
 else
-    echo "⚠️  apply_websocket_user_data_stream.py 없음"
+    echo "[WARNING] apply_websocket_user_data_stream.py not found"
 fi
 
 if [ -f "WEBSOCKET_COMPLETE_MIGRATION_GUIDE.md" ]; then
-    echo "✅ WEBSOCKET_COMPLETE_MIGRATION_GUIDE.md 발견"
+    echo "[OK] WEBSOCKET_COMPLETE_MIGRATION_GUIDE.md found"
 else
-    echo "⚠️  WEBSOCKET_COMPLETE_MIGRATION_GUIDE.md 없음"
+    echo "[WARNING] WEBSOCKET_COMPLETE_MIGRATION_GUIDE.md not found"
 fi
 
-# 5. Python 패키지 확인
+# 5. Check Python packages
 echo ""
-echo "[5/5] Python 패키지 확인..."
-python3 -c "import websocket; print('✅ websocket-client:', websocket.__version__)" 2>/dev/null || {
-    echo "⚠️  websocket-client 없음. 설치하시겠습니까? (y/N)"
+echo "[5/5] Checking Python packages..."
+python3 -c "import websocket; print('[OK] websocket-client:', websocket.__version__)" 2>/dev/null || {
+    echo "[WARNING] websocket-client not found. Install? (y/N)"
     read -r response
     if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
         pip3 install websocket-client
-        echo "✅ websocket-client 설치 완료"
+        echo "[OK] websocket-client installed"
     fi
 }
 
-python3 -c "import requests; print('✅ requests:', requests.__version__)" 2>/dev/null || {
-    echo "⚠️  requests 없음. 설치 중..."
+python3 -c "import requests; print('[OK] requests:', requests.__version__)" 2>/dev/null || {
+    echo "[WARNING] requests not found. Installing..."
     pip3 install requests
-    echo "✅ requests 설치 완료"
+    echo "[OK] requests installed"
 }
 
-# 완료
+# Done
 echo ""
 echo "======================================================"
-echo "✅ VPS 업데이트 완료!"
+echo "[SUCCESS] VPS Update Complete!"
 echo "======================================================"
 echo ""
-echo "다음 단계:"
-echo "1. binance_config.py가 있는지 확인:"
+echo "Next Steps:"
+echo "1. Check binance_config.py exists:"
 echo "   ls -la binance_config.py"
 echo ""
-echo "2. 없다면 수동으로 생성:"
+echo "2. If not, create manually:"
 echo "   nano binance_config.py"
-echo "   (API 키 입력 후 Ctrl+X, Y, Enter로 저장)"
+echo "   (Enter API keys, then Ctrl+X, Y, Enter to save)"
 echo ""
-echo "3. 봇 재시작:"
+echo "3. Restart bot:"
 echo "   screen -S trading_bot"
 echo "   python3 one_minute_surge_entry_strategy.py"
 echo ""
-echo "4. Screen 세션 나가기: Ctrl+A, D"
+echo "4. Detach screen: Ctrl+A, D"
 echo ""
-echo "5. 로그 확인:"
+echo "5. Check logs:"
 echo "   tail -f strategy.log"
 echo ""
 echo "======================================================"
-echo "🎉 업데이트 주요 내용:"
-echo "- WebSocket User Data Stream 추가"
-echo "- Rate Limit 97% 감소 (310 -> 10 weight/시간)"
-echo "- 실시간 포지션/잔고 업데이트"
-echo "- 응답 속도 99% 향상 (200ms -> <1ms)"
+echo "Update Highlights:"
+echo "- WebSocket User Data Stream added"
+echo "- Rate Limit reduced by 97% (310 -> 10 weight/hour)"
+echo "- Real-time position/balance updates"
+echo "- Response time improved by 99% (200ms -> <1ms)"
 echo "======================================================"
