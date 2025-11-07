@@ -540,8 +540,8 @@ class OneMinuteSurgeEntryStrategy:
                     'secret': secret_key if secret_key else None,
                     'sandbox': sandbox,
                     'enableRateLimit': True,
-                    'rateLimit': 50,  # 300 → 50 (속도 개선, 6배 빨라짐)
-                    'timeout': 3000,  # ⚡ API 타임아웃 3초 (빠른 실패)
+                    'rateLimit': 200,  # 50 → 200 (IP 밴 방지, 안전 우선)
+                    'timeout': 5000,  # API 타임아웃 5초
                     'options': {
                         'defaultType': 'future',
                         'adjustForTimeDifference': True,
