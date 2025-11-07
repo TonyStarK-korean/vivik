@@ -1746,7 +1746,7 @@ class OneMinuteSurgeEntryStrategy:
                     self.ws_kline_manager.subscribe_batch(
                         symbols=[ws_symbol],
                         timeframes=['3m', '5m', '15m', '1d'],
-                        load_history=True  # 초기 히스토리 자동 로드
+                        load_history=False  # Rate Limit 방지
                     )
 
                     self._write_debug_log(f"[{symbol.replace('/USDT:USDT', '')}] WebSocket 구독 및 초기 히스토리 로드 완료 ({timeframe})")
@@ -1843,10 +1843,10 @@ class OneMinuteSurgeEntryStrategy:
                             self.ws_kline_manager.subscribe_batch(
                                 symbols=batch_symbols,
                                 timeframes=['3m', '5m', '15m', '1d'],
-                                load_history=True,   # ✅ 히스토리 로드 활성화 (초스피드의 핵심!)
-                                batch_size=75,       # 내부 배치 크기 (75심볼 = 300개 연결)
-                                delay=1.0,           # 배치 간 1.0초 대기 (Rate Limit 방지)
-                                max_workers=10       # 병렬 히스토리 로드 (10개 스레드)
+                                load_history=False,  # ❌ 히스토리 로드 비활성화 (Rate Limit 방지!)
+                                batch_size=50,       # 75 → 50 (API 요청 감소)
+                                delay=2.0,           # 배치 간 2.0초 대기 (Rate Limit 방지)
+                                max_workers=3        # 10 → 3 (동시 요청 대폭 감소)
                             )
                             subscribed_count += len(batch_symbols)
                             print(f"   ✅ 배치 {batch_idx + 1}/{total_batches} 완료 ({subscribed_count}/{total_symbols}개)")
@@ -3244,7 +3244,7 @@ class OneMinuteSurgeEntryStrategy:
                         self.ws_kline_manager.subscribe_batch(
                             symbols=[ws_symbol],
                             timeframes=['1m', '3m', '5m', '15m', '1d'],
-                            load_history=True
+                            load_history=False  # Rate Limit 방지
                         )
 
                         # 구독 추적에 추가
@@ -4257,10 +4257,9 @@ class OneMinuteSurgeEntryStrategy:
                 except Exception as e:
                     continue  # 에러 시 무시하고 계속
         else:
-            # 🚀 극한 병렬 처리: 스레드 수 대폭 증가 (30→50)
-            # 캐싱 활성화로 API 부하 최소화
-            # CPU 코어 수에 관계없이 I/O 대기가 주요 병목이므로 스레드 증가 유효
-            max_workers = min(len(symbols), 100)  # 최대 100개 동시 처리 (극한 속도)
+            # 🛡️ Rate Limit 방지: 동시 처리 제한
+            # API 부하 최소화를 위해 동시 요청 수 제한
+            max_workers = min(len(symbols), 10)  # 최대 10개 동시 처리 (Rate Limit 방지)
             
             # 🛡️ 스레드 안전 버전: future 객체와 symbol을 안전하게 매핑
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -8786,7 +8785,7 @@ class OneMinuteSurgeEntryStrategy:
         import time
 
         filtered_symbols = []
-        batch_size = 20  # 100 → 20 축소 (Rate Limit 안전성 강화)
+        batch_size = 10  # 20 → 10 축소 (Rate Limit 강력 방지)
         total_batches = (len(candidate_symbols) + batch_size - 1) // batch_size
 
         # 배치 생성
@@ -8848,10 +8847,10 @@ class OneMinuteSurgeEntryStrategy:
 
             return batch_idx, batch_filtered, batch_checked
 
-        # 병렬 처리 실행
+        # 병렬 처리 실행 (Rate Limit 방지)
         completed_batches = 0
         total_checked = 0
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:  # 3 → 2 (Rate Limit 방지)
             future_to_batch = {executor.submit(process_full_4h_batch, batch): batch[0] for batch in batches}
 
             for future in as_completed(future_to_batch):
@@ -8998,10 +8997,10 @@ class OneMinuteSurgeEntryStrategy:
             end_idx = min(start_idx + batch_size, len(new_symbols))
             batches.append((batch_idx, new_symbols[start_idx:end_idx]))
 
-        # 병렬 처리 (더 많은 워커로 빠르게)
+        # 병렬 처리 (Rate Limit 방지)
         completed_batches = 0
         total_checked = 0
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:  # 5 → 2 (Rate Limit 방지)
             future_to_batch = {executor.submit(process_incremental_batch, batch): batch[0] for batch in batches}
 
             for future in as_completed(future_to_batch):
