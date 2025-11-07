@@ -1363,35 +1363,10 @@ class OneMinuteSurgeEntryStrategy:
             if hasattr(self, '_api_rate_limited') and self._api_rate_limited:
                 return None
             
-            # ⚡ WebSocket 데이터 부족시 REST API 폴백 허용 (지표 계산을 위해)
-            # WebSocket은 실시간이라 히스토리가 부족할 수 있음
-            try:
-                # 마지막 수단으로 REST API 사용 (충분한 데이터 확보용)
-                self.logger.debug(f"WebSocket 데이터 부족 - REST API 폴백 시도: {symbol} {timeframe}")
-
-                # Rate Limit 방지 최소화 (병렬 처리에서는 거의 불필요)
-                # 스킵 - 병렬 처리로 자연스럽게 분산됨
-                
-                # 🚀 캐시 효율 극대화: 항상 최대 데이터 가져오기 (2000개)
-                fetch_limit = max(limit, 2000)  # 최소 2000개로 캐시 효율 극대화
-                ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=fetch_limit)
-                if ohlcv and len(ohlcv) >= 10:  # 최소 10개 캔들
-                    # DataFrame으로 변환
-                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-
-                    # 🚀 캐시에 저장
-                    if not hasattr(self, '_ohlcv_cache'):
-                        self._ohlcv_cache = {}
-                    self._ohlcv_cache[cache_key] = (df, current_time)
-                    return df
-                else:
-                    return None
-                    
-            except Exception as api_e:
-                # REST API도 실패시 완전 포기
-                self.logger.debug(f"REST API 폴백도 실패: {symbol} {timeframe} - {api_e}")
-                return None
+            # 🚨 REST API 완전 차단 - IP 밴 방지 최우선!
+            # WebSocket 데이터가 없으면 그냥 None 반환
+            self.logger.debug(f"WebSocket 데이터 없음 - REST API 차단됨 (IP 밴 방지): {symbol} {timeframe}")
+            return None
 
         except Exception as e:
             self.logger.error(f"{symbol} {timeframe} 데이터 조회 실패: {e}")
@@ -8808,8 +8783,22 @@ class OneMinuteSurgeEntryStrategy:
                     symbol = symbol_data[0]
                     batch_checked += 1
 
-                    # REST API로 4h 데이터 조회
-                    ohlcv = self.exchange.fetch_ohlcv(symbol, '4h', limit=10)
+                    # WebSocket에서 4h 데이터 조회 (REST API 차단!)
+                    ohlcv_df = self.get_ohlcv_data(symbol, '4h', limit=10)
+                    if ohlcv_df is None or len(ohlcv_df) < 5:
+                        continue
+
+                    # DataFrame을 OHLCV 리스트 형식으로 변환
+                    ohlcv = []
+                    for _, row in ohlcv_df.iterrows():
+                        ohlcv.append([
+                            int(row['timestamp'].timestamp() * 1000),
+                            row['open'],
+                            row['high'],
+                            row['low'],
+                            row['close'],
+                            row['volume']
+                        ])
 
                     if not ohlcv or len(ohlcv) < 5:  # 최소 5개 필요 (4봉 + 1개)
                         continue
@@ -8945,8 +8934,22 @@ class OneMinuteSurgeEntryStrategy:
                     symbol = symbol_data[0]
                     batch_checked += 1
 
-                    # 최신 5개 캔들 조회 (4봉 + 1개)
-                    ohlcv = self.exchange.fetch_ohlcv(symbol, '4h', limit=5)
+                    # WebSocket에서 4h 데이터 조회 (REST API 차단!)
+                    ohlcv_df = self.get_ohlcv_data(symbol, '4h', limit=5)
+                    if ohlcv_df is None or len(ohlcv_df) < 5:
+                        continue
+
+                    # DataFrame을 OHLCV 리스트 형식으로 변환
+                    ohlcv = []
+                    for _, row in ohlcv_df.iterrows():
+                        ohlcv.append([
+                            int(row['timestamp'].timestamp() * 1000),
+                            row['open'],
+                            row['high'],
+                            row['low'],
+                            row['close'],
+                            row['volume']
+                        ])
 
                     if not ohlcv or len(ohlcv) < 5:
                         continue
@@ -9523,14 +9526,23 @@ class OneMinuteSurgeEntryStrategy:
 
                     # 오늘 09:00 이후 변동률 계산 (1시간봉 사용)
                     try:
-                        # 🛡️ Rate Limit 체크 및 대기
-                        self.rate_tracker.wait_if_needed(weight=5)
-
                         hours_since_9am = int((datetime.now(timezone.utc).timestamp() * 1000 - since_timestamp) / (1000 * 3600)) + 2
-                        ohlcv = self.exchange.fetch_ohlcv(symbol, '1h', limit=min(hours_since_9am, 24))
 
-                        # 🛡️ API 호출 가중치 기록
-                        self.rate_tracker.add_request(weight=5)
+                        # WebSocket에서 1h 데이터 조회 (REST API 차단!)
+                        ohlcv_df = self.get_ohlcv_data(symbol, '1h', limit=min(hours_since_9am, 24))
+
+                        # DataFrame을 OHLCV 리스트 형식으로 변환
+                        ohlcv = []
+                        if ohlcv_df is not None and len(ohlcv_df) > 0:
+                            for _, row in ohlcv_df.iterrows():
+                                ohlcv.append([
+                                    int(row['timestamp'].timestamp() * 1000),
+                                    row['open'],
+                                    row['high'],
+                                    row['low'],
+                                    row['close'],
+                                    row['volume']
+                                ])
 
                         if ohlcv and len(ohlcv) > 0:
                             # 09:00 시각에 가장 가까운 캔들 찾기
