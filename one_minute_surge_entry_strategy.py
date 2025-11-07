@@ -231,7 +231,7 @@ class RateLimitTracker:
         self.weight_used = 0
         self.window_start = time.time()
         self.max_weight = 1200  # 분당 제한 (바이낸스 기준)
-        self.warning_threshold = 0.8  # 80% 도달시 경고
+        self.warning_threshold = 0.75  # 75% 도달시 경고 (더 안전하게)
 
         # 📊 통계 수집 시스템
         self.stats = {
@@ -320,12 +320,12 @@ class RateLimitTracker:
             if current_hour in self.hourly_stats:
                 self.hourly_stats[current_hour]['warnings'] += 1
 
-            # 90% 이상이면 10초 대기
-            if self.weight_used >= self.max_weight * 0.9:
-                print(f"🛑 Rate Limit 90% 초과 - 10초 대기")
+            # 80% 이상이면 15초 대기 (더 안전하게)
+            if self.weight_used >= self.max_weight * 0.8:
+                print(f"🛑 Rate Limit 80% 초과 - 15초 대기")
                 self.stats['wait_count'] += 1
-                self.stats['total_wait_time'] += 10.0
-                time.sleep(10)
+                self.stats['total_wait_time'] += 15.0
+                time.sleep(15)
                 # 대기 후 리셋
                 self.weight_used = 0
                 self.window_start = time.time()
@@ -753,7 +753,7 @@ class OneMinuteSurgeEntryStrategy:
 
                 # WebSocket 시작 (오류 무시하고 계속 진행)
                 try:
-                    ws_started = self.ws_kline_manager.start(max_retries=2, retry_delay=3)
+                    ws_started = self.ws_kline_manager.start(max_retries=2, retry_delay=5)
                 except:
                     ws_started = False  # 모든 오류 무시
 
@@ -796,7 +796,7 @@ class OneMinuteSurgeEntryStrategy:
 
                 # WebSocket 시작 (오류 무시하고 계속 진행)
                 try:
-                    ws_started = self.ws_kline_manager.start(max_retries=2, retry_delay=3)
+                    ws_started = self.ws_kline_manager.start(max_retries=2, retry_delay=5)
                 except:
                     ws_started = False  # 모든 오류 무시
 
@@ -1185,9 +1185,9 @@ class OneMinuteSurgeEntryStrategy:
                         return df
                 except Exception as e:
                     last_error = e
-                    # 고속 모드: 재시도 대기 시간 단축 (0.2초 → 0.1초)
+                    # Rate Limit 방지: 재시도 대기 시간 증가 (0.1초 → 0.5초)
                     if attempt < max_retries - 1:
-                        time.sleep(0.1)  # 빠른 재시도
+                        time.sleep(0.5)  # 안전한 재시도
 
             # 실패 시 조용히 None 반환 (에러 로그 최소화)
             return None
@@ -1215,8 +1215,8 @@ class OneMinuteSurgeEntryStrategy:
                 except Exception as e:
                     last_error = e
                     if attempt < max_retries - 1:
-                        # 고속 모드: 재시도 대기 단축 (0.5초 → 0.2초)
-                        time.sleep(0.2)
+                        # Rate Limit 방지: 재시도 대기 증가 (0.2초 → 0.7초)
+                        time.sleep(0.7)
 
             # 실패 시 조용히 None 반환
             return None
@@ -1845,7 +1845,7 @@ class OneMinuteSurgeEntryStrategy:
                                 timeframes=['3m', '5m', '15m', '1d'],
                                 load_history=True,   # ✅ 히스토리 로드 활성화 (초스피드의 핵심!)
                                 batch_size=75,       # 내부 배치 크기 (75심볼 = 300개 연결)
-                                delay=0.3,           # 배치 간 0.3초 대기
+                                delay=1.0,           # 배치 간 1.0초 대기 (Rate Limit 방지)
                                 max_workers=10       # 병렬 히스토리 로드 (10개 스레드)
                             )
                             subscribed_count += len(batch_symbols)
@@ -1855,10 +1855,10 @@ class OneMinuteSurgeEntryStrategy:
                             failed_count += len(batch_symbols)
                             print(f"   ⚠️ 배치 {batch_idx + 1} 구독 실패 (무시하고 계속)")
 
-                        # 배치 간 최소 딜레이 (속도 우선)
+                        # 배치 간 안전 딜레이 (Rate Limit 방지)
                         if batch_idx < total_batches - 1:
                             import time
-                            wait_time = 0.5  # 0.5초만 대기 (빠른 처리)
+                            wait_time = 1.5  # 1.5초 대기 (Rate Limit 방지)
                             time.sleep(wait_time)
 
                     except:
@@ -1933,14 +1933,14 @@ class OneMinuteSurgeEntryStrategy:
             print(f"   🔄 동적 구독 방식: 필터링 통과 심볼만 구독")
             print(f"   💾 버퍼 초기화 완료")
             
-            # 3초 후 버퍼 상태 확인
+            # 5초 후 버퍼 상태 확인
             import threading
             def check_buffer_after_delay():
                 import time
-                time.sleep(3)
+                time.sleep(5)  # Rate Limit 방지
                 if hasattr(self, '_websocket_kline_buffer'):
                     buffer_count = len(self._websocket_kline_buffer)
-                    print(f"🔍 3초 후 WebSocket 버퍼 상태: {buffer_count}개 심볼 버퍼링 중")
+                    print(f"🔍 5초 후 WebSocket 버퍼 상태: {buffer_count}개 심볼 버퍼링 중")
                     
                     # 데이터가 있는 버퍼만 카운트
                     data_buffers = 0
@@ -4925,8 +4925,8 @@ class OneMinuteSurgeEntryStrategy:
                         # 📊 일일 사용 원금 추적 (Day ROE 계산용)
                         self.today_stats['total_entry_amount'] += entry_amount
 
-                        # ✅ DCA 1차, 2차 지정가 주문 배치 확인 (0.5초 후 검증)
-                        time.sleep(0.5)  # 주문 배치 시간 대기
+                        # ✅ DCA 1차, 2차 지정가 주문 배치 확인 (1.0초 후 검증)
+                        time.sleep(1.0)  # 주문 배치 시간 대기
                         if self.dca_manager and hasattr(self.dca_manager, 'get_pending_orders'):
                             try:
                                 future_symbol = clean_symbol + 'USDT'  # BTC → BTCUSDT
@@ -5253,9 +5253,9 @@ class OneMinuteSurgeEntryStrategy:
                         # 1~2%: 0.25% 이하로 하락 시 청산
                         exit_threshold = 0.25
                     if profit_pct <= exit_threshold:
-                        # 🚨 수익률 급변동 방지: 0.1초 재확인
+                        # 🚨 수익률 급변동 방지: 0.3초 재확인
                         import time
-                        time.sleep(0.1)
+                        time.sleep(0.3)
                         
                         # 현재 가격 재조회로 수익률 재계산
                         try:
@@ -7136,8 +7136,8 @@ class OneMinuteSurgeEntryStrategy:
                     else:
                         print(f"[상세모니터링] ❌ {clean_symbol} 기술적청산 실패")
                         
-                # API 호출 간격 조절
-                time.sleep(0.2)  # 200ms 간격
+                # API 호출 간격 조절 (Rate Limit 방지)
+                time.sleep(0.5)  # 500ms 간격
                         
             except Exception as e:
                 print(f"[상세모니터링] ❌ {symbol} 분석 실패: {e}")
@@ -7162,8 +7162,8 @@ class OneMinuteSurgeEntryStrategy:
                 # Simplified fallback monitoring logging
                 if abs(profit_pct) > 5.0:  # Only show significant changes
                     print(f"📊 {clean_symbol}: {profit_pct:+.2f}%")
-                
-                time.sleep(0.1)  # 100ms 간격
+
+                time.sleep(0.3)  # 300ms 간격 (Rate Limit 방지)
                 
             except Exception as e:
                 print(f"[폴백모니터링] ❌ {symbol} 조회 실패: {e}")
