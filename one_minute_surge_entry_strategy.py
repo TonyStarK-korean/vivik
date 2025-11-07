@@ -1363,11 +1363,11 @@ class OneMinuteSurgeEntryStrategy:
             if hasattr(self, '_api_rate_limited') and self._api_rate_limited:
                 return None
             
-            # 🔄 하이브리드 모드: WebSocket 부족 시 REST API 폴백 (Rate Limit 강화!)
-            # 60% 미만일 때만 REST API 사용 허용
+            # 🔄 하이브리드 모드: WebSocket 부족 시 REST API 폴백 (강력 제한!)
+            # 40% 미만일 때만 REST API 사용 허용 (더욱 보수적)
             if hasattr(self, 'rate_tracker'):
                 current_usage = (self.rate_tracker.weight_used / self.rate_tracker.max_weight) * 100
-                if current_usage >= 50:  # 50% 넘으면 REST API 차단!
+                if current_usage >= 40:  # 40% 넘으면 REST API 차단!
                     self.logger.debug(f"Rate Limit {current_usage:.1f}% - REST API 차단: {symbol} {timeframe}")
                     return None
 
@@ -1850,10 +1850,10 @@ class OneMinuteSurgeEntryStrategy:
                             self.ws_kline_manager.subscribe_batch(
                                 symbols=batch_symbols,
                                 timeframes=['3m', '5m', '15m', '1d'],
-                                load_history=True,   # ✅ 하이브리드: 초기만 REST API (IP 밴 방지 설정!)
-                                batch_size=10,       # 50 → 10 (극도로 안전하게)
-                                delay=10.0,          # 2.0 → 10.0초 (IP 밴 절대 방지!)
-                                max_workers=1        # 3 → 1 (한 번에 1개씩만!)
+                                load_history=True,   # ✅ 하이브리드: 초기만 REST API
+                                batch_size=25,       # 10 → 25 (속도 개선!)
+                                delay=3.0,           # 10.0 → 3.0초 (3배 빠르게!)
+                                max_workers=2        # 1 → 2 (2배 빠르게!)
                             )
                             subscribed_count += len(batch_symbols)
                             print(f"   ✅ 배치 {batch_idx + 1}/{total_batches} 완료 ({subscribed_count}/{total_symbols}개)")
@@ -4264,9 +4264,9 @@ class OneMinuteSurgeEntryStrategy:
                 except Exception as e:
                     continue  # 에러 시 무시하고 계속
         else:
-            # 🛡️ Rate Limit 방지: 동시 처리 제한
-            # API 부하 최소화를 위해 동시 요청 수 제한
-            max_workers = min(len(symbols), 10)  # 최대 10개 동시 처리 (Rate Limit 방지)
+            # ⚡ 스캔 속도 개선: 캐시 조회는 안전하므로 병렬 증가
+            # REST API는 별도 제한이 있으므로 스캔은 빠르게
+            max_workers = min(len(symbols), 30)  # 10 → 30 (3배 빠르게!)
             
             # 🛡️ 스레드 안전 버전: future 객체와 symbol을 안전하게 매핑
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -8844,7 +8844,7 @@ class OneMinuteSurgeEntryStrategy:
 
                         if open_price > 0:
                             surge_pct = ((high_price - open_price) / open_price) * 100
-                            if surge_pct >= 3.0:  # 3% 급등 조건 (문서 기준)
+                            if surge_pct >= 4.0:  # 4% 급등 조건 (엄격한 필터링)
                                 surge_found = True
                                 break
 
@@ -8868,10 +8868,10 @@ class OneMinuteSurgeEntryStrategy:
 
             return batch_idx, batch_filtered, batch_checked
 
-        # 병렬 처리 실행 (Rate Limit 방지)
+        # 병렬 처리 실행 (속도 개선)
         completed_batches = 0
         total_checked = 0
-        with ThreadPoolExecutor(max_workers=2) as executor:  # 3 → 2 (Rate Limit 방지)
+        with ThreadPoolExecutor(max_workers=5) as executor:  # 2 → 5 (WebSocket이므로 안전)
             future_to_batch = {executor.submit(process_full_4h_batch, batch): batch[0] for batch in batches}
 
             for future in as_completed(future_to_batch):
@@ -8999,7 +8999,7 @@ class OneMinuteSurgeEntryStrategy:
 
                         if open_price > 0:
                             surge_pct = ((high_price - open_price) / open_price) * 100
-                            if surge_pct >= 3.0:  # 3% 급등 조건 (문서 기준)
+                            if surge_pct >= 4.0:  # 4% 급등 조건 (엄격한 필터링)
                                 surge_found = True
                                 break
 
@@ -9032,10 +9032,10 @@ class OneMinuteSurgeEntryStrategy:
             end_idx = min(start_idx + batch_size, len(new_symbols))
             batches.append((batch_idx, new_symbols[start_idx:end_idx]))
 
-        # 병렬 처리 (Rate Limit 방지)
+        # 병렬 처리 (속도 개선)
         completed_batches = 0
         total_checked = 0
-        with ThreadPoolExecutor(max_workers=2) as executor:  # 5 → 2 (Rate Limit 방지)
+        with ThreadPoolExecutor(max_workers=5) as executor:  # 2 → 5 (WebSocket이므로 안전)
             future_to_batch = {executor.submit(process_incremental_batch, batch): batch[0] for batch in batches}
 
             for future in as_completed(future_to_batch):
