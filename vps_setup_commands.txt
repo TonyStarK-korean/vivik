@@ -1,0 +1,101 @@
+# VPS 설정 명령어 (158.247.193.81)
+
+# 1. VPS 연결
+ssh root@158.247.193.81
+
+# 2. 프로젝트 디렉토리 생성
+mkdir -p /root/alpha_z_trading
+cd /root/alpha_z_trading
+
+# 3. GitHub에서 최신 코드 다운로드
+git clone https://github.com/TonyStarK-korean/vivik.git .
+
+# 4. 시스템 패키지 설치
+apt update
+apt install -y python3 python3-pip python3-venv git screen htop
+
+# 5. 가상환경 생성 및 활성화
+python3 -m venv venv
+source venv/bin/activate
+
+# 6. Python 패키지 설치
+pip install --upgrade pip
+pip install ccxt pandas numpy requests python-binance websockets
+
+# 7. 추가 패키지 (ta-lib은 선택사항)
+pip install python-dateutil pytz aiohttp
+
+# 8. 디렉토리 구조 생성
+mkdir -p logs data
+
+# 9. 파일 권한 설정
+chmod +x one_minute_surge_entry_strategy.py
+
+# 10. 24시간 실행 스크립트 생성
+cat > start_trading.sh << 'EOF'
+#!/bin/bash
+PROJECT_DIR="/root/alpha_z_trading"
+LOG_DIR="${PROJECT_DIR}/logs"
+SCREEN_NAME="alpha_z_trading"
+
+echo "🚀 Alpha-Z Trading System 시작..."
+cd ${PROJECT_DIR}
+mkdir -p ${LOG_DIR}
+
+# 기존 세션 종료
+if screen -list | grep -q "${SCREEN_NAME}"; then
+    screen -S ${SCREEN_NAME} -X quit
+    sleep 2
+fi
+
+# 새로운 세션 시작
+screen -dmS ${SCREEN_NAME} bash -c "
+    cd ${PROJECT_DIR}
+    source venv/bin/activate
+    while true; do
+        echo '\$(date): Alpha-Z Trading 시작' >> ${LOG_DIR}/system.log
+        python one_minute_surge_entry_strategy.py 2>&1 | tee -a ${LOG_DIR}/trading_\$(date +%Y%m%d).log
+        echo '\$(date): 재시작 대기...' >> ${LOG_DIR}/system.log
+        sleep 10
+    done
+"
+
+echo "✅ 24시간 실행 시작 완료!"
+echo "세션 확인: screen -list"
+echo "세션 접속: screen -r ${SCREEN_NAME}"
+echo "로그 확인: tail -f ${LOG_DIR}/trading_\$(date +%Y%m%d).log"
+EOF
+
+# 11. 실행 권한 부여
+chmod +x start_trading.sh
+
+# 12. 시스템 서비스 등록 (선택사항)
+cat > /etc/systemd/system/alpha-z-trading.service << 'EOF'
+[Unit]
+Description=Alpha-Z Trading System
+After=network.target
+
+[Service]
+Type=forking
+User=root
+WorkingDirectory=/root/alpha_z_trading
+ExecStart=/root/alpha_z_trading/start_trading.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 13. 서비스 활성화
+systemctl daemon-reload
+systemctl enable alpha-z-trading
+systemctl start alpha-z-trading
+
+# 14. 상태 확인 명령어
+echo "=== 상태 확인 명령어 ==="
+echo "시스템 서비스 상태: systemctl status alpha-z-trading"
+echo "Screen 세션 확인: screen -list"
+echo "실시간 로그 확인: tail -f /root/alpha_z_trading/logs/trading_\$(date +%Y%m%d).log"
+echo "시스템 로그 확인: tail -f /root/alpha_z_trading/logs/system.log"
+echo "프로세스 확인: ps aux | grep python"

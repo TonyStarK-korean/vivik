@@ -4323,7 +4323,7 @@ class OneMinuteSurgeEntryStrategy:
 
         # 전략별로 통계 수집
         stats_by_strategy = {}
-        for result in all_results:
+        for result in flattened_results:
             strategy = result.get('strategy_type', 'Unknown')
             status = result.get('status', 'unknown')
             failed = result.get('failed_count', 0)
@@ -4348,25 +4348,35 @@ class OneMinuteSurgeEntryStrategy:
 
         # 전략별 통계 출력
         for strategy in ['전략A: 3분봉 시세 초입 포착', '전략B: 5분봉 초입 초강력 타점', '전략C: 15분봉 대박파동 맥점']:
-            if strategy in stats_by_strategy:
-                stats = stats_by_strategy[strategy]
-                total = sum([stats.get('entry_signal', 0), stats.get('near_entry', 0),
-                            stats.get('potential_entry', 0), stats.get('watchlist', 0)])
+            # 전략이 통계에 없으면 기본값으로 설정
+            if strategy not in stats_by_strategy:
+                stats_by_strategy[strategy] = {
+                    'entry_signal': 0,
+                    'near_entry': 0,
+                    'potential_entry': 0,
+                    'watchlist': 0,
+                    'no_signal': 0,
+                    'failed_counts': {}
+                }
+            
+            stats = stats_by_strategy[strategy]
+            total = sum([stats.get('entry_signal', 0), stats.get('near_entry', 0),
+                        stats.get('potential_entry', 0), stats.get('watchlist', 0)])
 
-                print(f"\n[{strategy}]")
-                print(f"  총 {total}개 심볼 분석")
-                print(f"  - 진입신호 (0개 실패): {stats.get('entry_signal', 0)}개")
-                print(f"  - 진입임박 (1개 실패): {stats.get('near_entry', 0)}개")
-                print(f"  - 진입확률 (2개 실패): {stats.get('potential_entry', 0)}개")
-                print(f"  - 관심종목 (3+개 실패): {stats.get('watchlist', 0)}개")
+            print(f"\n[{strategy}]")
+            print(f"  총 {total}개 심볼 분석")
+            print(f"  - 진입신호 (0개 실패): {stats.get('entry_signal', 0)}개")
+            print(f"  - 진입임박 (1개 실패): {stats.get('near_entry', 0)}개")
+            print(f"  - 진입확률 (2개 실패): {stats.get('potential_entry', 0)}개")
+            print(f"  - 관심종목 (3+개 실패): {stats.get('watchlist', 0)}개")
 
-                # 실패 개수 분포
-                if stats['failed_counts']:
-                    print(f"  실패 개수 분포: ", end="")
-                    for failed_count in sorted(stats['failed_counts'].keys()):
-                        count = stats['failed_counts'][failed_count]
-                        print(f"{failed_count}개={count}, ", end="")
-                    print()
+            # 실패 개수 분포
+            if stats['failed_counts']:
+                print(f"  실패 개수 분포: ", end="")
+                for failed_count in sorted(stats['failed_counts'].keys()):
+                    count = stats['failed_counts'][failed_count]
+                    print(f"{failed_count}개={count}, ", end="")
+                print()
 
         print("="*60)
 
