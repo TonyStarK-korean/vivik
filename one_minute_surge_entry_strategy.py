@@ -1737,22 +1737,22 @@ class OneMinuteSurgeEntryStrategy:
                 self._write_debug_log(f"[{symbol.replace('/USDT:USDT', '')}] Rate limit detected - API calls 건너뛰기 ({timeframe})")
                 
                 # WebSocket subscription만 Active화 (API calls 없이) - Batch Subscription으로 Change
-                # 전략에 Required한 Timeframe만 Subscription (전략A 비Active화로 1m Excluded, 4h는 REST API Filtering 전용)
+                # 전략에 Required한 Timeframe만 Subscription (전략A 비Active화로 1m Excluded)
                 if self.ws_kline_manager:
-                    # Batch Subscription (1count Symbol × 4count Timeframe)
+                    # Batch Subscription (1count Symbol × 5count Timeframe) - 4h 추가 (속도 최적화)
                     self.ws_kline_manager.subscribe_batch(
                         symbols=[ws_symbol],
-                        timeframes=['3m', '5m', '15m', '1d']
+                        timeframes=['3m', '5m', '15m', '4h', '1d']
                     )
                 return
             
             # ⚡ python-binance로 Initial data Load (Rate limit 없을 때만)
             try:
                 if self.ws_kline_manager:
-                    # WebSocket subscription 및 초기 히스토리 Load (Batch Subscription) - 4h는 REST API Filtering 전용
+                    # WebSocket subscription 및 초기 히스토리 Load (Batch Subscription) - 4h 추가 (속도 최적화)
                     self.ws_kline_manager.subscribe_batch(
                         symbols=[ws_symbol],
-                        timeframes=['3m', '5m', '15m', '1d'],
+                        timeframes=['3m', '5m', '15m', '4h', '1d'],
                         load_history=True  # 하이브리드: 초기 히스토리 Load
                     )
 
@@ -1844,12 +1844,12 @@ class OneMinuteSurgeEntryStrategy:
                     batch_symbols = symbols_list[start_idx:end_idx]
 
                     try:
-                        # Batch Subscription (4h Excluded - REST API Filtering 전용)
+                        # Batch Subscription - 4h 추가 (속도 최적화)
                         # ⚡ 안정화 모드: 300count 이하 제한 + 에러 무시 + 느린 속도
                         try:
                             self.ws_kline_manager.subscribe_batch(
                                 symbols=batch_symbols,
-                                timeframes=['3m', '5m', '15m', '1d'],
+                                timeframes=['3m', '5m', '15m', '4h', '1d'],
                                 load_history=True,   # ✅ 하이브리드: 초기만 REST API
                                 batch_size=25,       # 10 → 25 (속도 count선!)
                                 delay=3.0,           # 10.0 → 3.0초 (3배 빠르게!)
@@ -9086,7 +9086,96 @@ class OneMinuteSurgeEntryStrategy:
         except Exception as e:
             print(f"⚠️ 상위 100위권 추출 Failed: {e}")
             return []
-    
+
+    def _apply_1d_filtering(self, candidate_symbols):
+        """1일봉 필터링: 일봉 High vs Open 50% 이하만 통과"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import time
+
+        try:
+            if not candidate_symbols:
+                return []
+
+            print(f"🔍 1d Filtering Starting: {len(candidate_symbols)}count Symbol → High vs Open 50% 이하 검사")
+
+            filtered_symbols = []
+            batch_size = 50  # 4h와 동일한 배치 크기
+            total_batches = (len(candidate_symbols) + batch_size - 1) // batch_size
+
+            # Batch 생성
+            batches = []
+            for batch_idx in range(total_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = min(start_idx + batch_size, len(candidate_symbols))
+                batches.append((batch_idx, candidate_symbols[start_idx:end_idx]))
+
+            print(f"   📡 1d 필터링: {len(candidate_symbols)}count Symbol을 {total_batches}count Batch로 병렬 처리")
+
+            # Batch 처리 함수
+            def process_1d_batch(batch_data):
+                batch_idx, batch_symbols = batch_data
+                batch_filtered = []
+                batch_checked = 0
+
+                for symbol_data in batch_symbols:
+                    try:
+                        symbol = symbol_data[0]
+                        batch_checked += 1
+
+                        # WebSocket에서 1d 데이터 조회
+                        ohlcv_df = self.get_ohlcv_data(symbol, '1d', limit=5)
+                        if ohlcv_df is None or len(ohlcv_df) < 1:
+                            continue
+
+                        # 최신 일봉 데이터
+                        latest_daily = ohlcv_df.iloc[-1]
+
+                        # 조건: High vs Open 50% 이하
+                        if (hasattr(latest_daily, 'open') and hasattr(latest_daily, 'high') and
+                            latest_daily['open'] > 0):
+                            daily_open_to_high = ((latest_daily['high'] - latest_daily['open']) / latest_daily['open']) * 100
+
+                            if daily_open_to_high <= 50.0:
+                                batch_filtered.append(symbol_data)
+
+                        # Rate Limit 보호: 최소 딜레이
+                        time.sleep(0.05)
+
+                    except Exception as e:
+                        if "429" in str(e) or "rate limit" in str(e).lower():
+                            time.sleep(1)
+                        continue
+
+                return batch_idx, batch_filtered, batch_checked
+
+            # 병렬 처리 실행
+            completed_batches = 0
+            total_checked = 0
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_batch = {executor.submit(process_1d_batch, batch): batch[0] for batch in batches}
+
+                for future in as_completed(future_to_batch):
+                    try:
+                        batch_idx, batch_filtered, batch_checked = future.result()
+                        filtered_symbols.extend(batch_filtered)
+                        total_checked += batch_checked
+                        completed_batches += 1
+
+                        if completed_batches % 2 == 0 or completed_batches == total_batches:
+                            print(f"   ⏳ Batch {completed_batches}/{total_batches} Complete (검사: {total_checked}count, 통과: {len(filtered_symbols)}count)")
+
+                    except Exception as e:
+                        continue
+
+            print(f"✅ 1d Filtering Complete: {len(filtered_symbols)}/{total_checked}count 통과 (통과율: {len(filtered_symbols)/max(total_checked,1)*100:.1f}%)")
+            return filtered_symbols
+
+        except Exception as e:
+            print(f"❌ 1d Filtering Failed: {e}")
+            import traceback
+            print(f"🔍 DEBUG: Error 스택: {traceback.format_exc()}")
+            return candidate_symbols  # 에러 시 원본 그대로 반환
+
     def _websocket_15m_filtering(self, candidate_symbols):
         """⚡ WebSocket 15minute candles 데이터로 Filtering (4h 대체) - 성능 최적화된 제한적 Process"""
         filtered_symbols = []
@@ -9694,13 +9783,21 @@ class OneMinuteSurgeEntryStrategy:
 
             print(f"🔍 전체 USDT Symbol 수집: {len(candidate_symbols)}count")
 
-            # 2Stage: 4Time봉 급등 Filtering (4봉 이내 3% 이상)
+            # 2Stage: 4Time봉 급등 Filtering (4봉 이내 4% 이상)
             filtered_symbols = self._apply_4h_filtering(candidate_symbols)
 
             # 4h Filtering 결과가 없으면 폴백으로 통합 Filtering Usage
             if not filtered_symbols or len(filtered_symbols) == 0:
                 print("⚠️ 4h Filtering No results → 통합 Filtering으로 폴백")
                 filtered_symbols = self._apply_integrated_filtering(candidate_symbols)
+
+            # 3Stage: 1일봉 필터링 (High vs Open 50% 이하만 통과)
+            if filtered_symbols and len(filtered_symbols) > 0:
+                filtered_symbols = self._apply_1d_filtering(filtered_symbols)
+
+                if not filtered_symbols or len(filtered_symbols) == 0:
+                    print("⚠️ 1d Filtering 통과 종목 없음")
+                    return []
 
             # 변동률 순으로 정렬
             filtered_symbols.sort(key=lambda x: x[1], reverse=True)
