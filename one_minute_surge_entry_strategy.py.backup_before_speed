@@ -8792,7 +8792,7 @@ class OneMinuteSurgeEntryStrategy:
         import time
 
         filtered_symbols = []
-        batch_size = 50  # 🚀 OPTIMIZATION: 10 → 50 (3-5x faster, safe for WebSocket)
+        batch_size = 10  # 20 → 10 축소 (Rate Limit 강력 방지)
         total_batches = (len(candidate_symbols) + batch_size - 1) // batch_size
 
         # Batch Create
@@ -8820,17 +8820,17 @@ class OneMinuteSurgeEntryStrategy:
                     if ohlcv_df is None or len(ohlcv_df) < 5:
                         continue
 
-                    # 🚀 OPTIMIZATION: Fast DataFrame conversion using to_numpy()
-                    timestamps = (ohlcv_df['timestamp'].astype('int64') // 10**6).to_numpy()
-                    opens = ohlcv_df['open'].to_numpy()
-                    highs = ohlcv_df['high'].to_numpy()
-                    lows = ohlcv_df['low'].to_numpy()
-                    closes = ohlcv_df['close'].to_numpy()
-                    volumes = ohlcv_df['volume'].to_numpy()
-
-                    ohlcv = [[int(t), o, h, l, c, v] for t, o, h, l, c, v in zip(
-                        timestamps, opens, highs, lows, closes, volumes
-                    )]
+                    # DataFrame을 OHLCV 리스트 형식으로 변환
+                    ohlcv = []
+                    for _, row in ohlcv_df.iterrows():
+                        ohlcv.append([
+                            int(row['timestamp'].timestamp() * 1000),
+                            row['open'],
+                            row['high'],
+                            row['low'],
+                            row['close'],
+                            row['volume']
+                        ])
 
                     if not ohlcv or len(ohlcv) < 5:  # 최소 5count Required (4봉 + 1count)
                         continue
@@ -8858,8 +8858,8 @@ class OneMinuteSurgeEntryStrategy:
                             if total_change_pct >= 0:  # 전체 구간 0% 이상 상승이면 통과
                                 batch_filtered.append(symbol_data)
 
-                    # 🛡️ Rate Limit protection: Minimal delay (WebSocket safe)
-                    time.sleep(0.05)  # 🚀 OPTIMIZATION: 0.33s → 0.05s (6x faster, safe with WebSocket)
+                    # 🛡️ Rate Limit protection: 0.33초 대기 (병렬 3워커 × 초당 3count = 안전)
+                    time.sleep(0.33)
 
                 except Exception as e:
                     if "429" in str(e) or "rate limit" in str(e).lower():
@@ -8953,7 +8953,7 @@ class OneMinuteSurgeEntryStrategy:
 
         # 3. New Symbol들의 동적 범위 검사
         new_filtered = []
-        batch_size = 50  # 🚀 OPTIMIZATION: 20 → 50 (2-3x faster, safe with delay)
+        batch_size = 20  # Batch Size (50 → 20 축소, Rate Limit 안전성 강화)
         total_batches = (len(new_symbols) + batch_size - 1) // batch_size
 
         def process_incremental_batch(batch_data):
@@ -8971,17 +8971,17 @@ class OneMinuteSurgeEntryStrategy:
                     if ohlcv_df is None or len(ohlcv_df) < 5:
                         continue
 
-                    # 🚀 OPTIMIZATION: Fast DataFrame conversion using to_numpy()
-                    timestamps = (ohlcv_df['timestamp'].astype('int64') // 10**6).to_numpy()
-                    opens = ohlcv_df['open'].to_numpy()
-                    highs = ohlcv_df['high'].to_numpy()
-                    lows = ohlcv_df['low'].to_numpy()
-                    closes = ohlcv_df['close'].to_numpy()
-                    volumes = ohlcv_df['volume'].to_numpy()
-
-                    ohlcv = [[int(t), o, h, l, c, v] for t, o, h, l, c, v in zip(
-                        timestamps, opens, highs, lows, closes, volumes
-                    )]
+                    # DataFrame을 OHLCV 리스트 형식으로 변환
+                    ohlcv = []
+                    for _, row in ohlcv_df.iterrows():
+                        ohlcv.append([
+                            int(row['timestamp'].timestamp() * 1000),
+                            row['open'],
+                            row['high'],
+                            row['low'],
+                            row['close'],
+                            row['volume']
+                        ])
 
                     if not ohlcv or len(ohlcv) < 5:
                         continue
@@ -9015,8 +9015,8 @@ class OneMinuteSurgeEntryStrategy:
                                 # Cache에 Add
                                 cache['passed_symbols'].add(symbol)
 
-                    # 🛡️ Rate Limit protection: Minimal delay (WebSocket safe)
-                    time.sleep(0.05)  # 🚀 OPTIMIZATION: 0.33s → 0.05s (6x faster, safe with WebSocket)
+                    # 🛡️ Rate Limit protection: 0.33초 대기 (Parallel processing 고려 안전 속도)
+                    time.sleep(0.33)
 
                 except Exception as e:
                     if "429" in str(e) or "rate limit" in str(e).lower():
@@ -9552,45 +9552,40 @@ class OneMinuteSurgeEntryStrategy:
                 print(f"📅 변동률 기준 시각: {today_9am_kst.strftime('%Y-%m-%d %H:%M:%S KST')} (UTC: {today_9am_utc.strftime('%Y-%m-%d %H:%M:%S')})")
                 print(f"🕐 Current KST: {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
 
-                # 🚀 OPTIMIZATION: Parallel processing for 09:00 변동률 calculation
-                print(f"⚡ Parallel processing 09:00 change calculation for {len(top_symbols)} symbols...")
-
-                def calculate_9am_change(symbol_data):
-                    """Calculate change since 09:00 for a single symbol (optimized)"""
-                    idx, symbol, _, volume_24h, ticker = symbol_data
+                # 전체 Symbol에 대해 09:00 이후 변동률 재계산
+                for idx, (symbol, _, volume_24h, ticker) in enumerate(top_symbols):
                     current_price = ticker.get('last', 0) or 0
 
+                    # 오늘 09:00 이후 변동률 계산 (1Time봉 Usage)
                     try:
                         hours_since_9am = int((datetime.now(timezone.utc).timestamp() * 1000 - since_timestamp) / (1000 * 3600)) + 2
 
-                        # WebSocket data fetch (REST API blocked!)
+                        # WebSocket에서 1h 데이터 조times (REST API blocked!)
                         ohlcv_df = self.get_ohlcv_data(symbol, '1h', limit=min(hours_since_9am, 24))
 
-                        # OPTIMIZATION: Use to_numpy() instead of iterrows()
+                        # DataFrame을 OHLCV 리스트 형식으로 변환
                         ohlcv = []
                         if ohlcv_df is not None and len(ohlcv_df) > 0:
-                            # Fast conversion: DataFrame to list using numpy
-                            timestamps = (ohlcv_df['timestamp'].astype('int64') // 10**6).to_numpy()
-                            opens = ohlcv_df['open'].to_numpy()
-                            highs = ohlcv_df['high'].to_numpy()
-                            lows = ohlcv_df['low'].to_numpy()
-                            closes = ohlcv_df['close'].to_numpy()
-                            volumes = ohlcv_df['volume'].to_numpy()
-
-                            ohlcv = [[int(t), o, h, l, c, v] for t, o, h, l, c, v in zip(
-                                timestamps, opens, highs, lows, closes, volumes
-                            )]
+                            for _, row in ohlcv_df.iterrows():
+                                ohlcv.append([
+                                    int(row['timestamp'].timestamp() * 1000),
+                                    row['open'],
+                                    row['high'],
+                                    row['low'],
+                                    row['close'],
+                                    row['volume']
+                                ])
 
                         if ohlcv and len(ohlcv) > 0:
-                            # Find closest candle to 09:00
+                            # 09:00 시각에 가장 가까운 캔들 찾기
                             base_price = None
                             for candle in ohlcv:
                                 if candle[0] >= since_timestamp:
-                                    base_price = candle[1]  # Open price
+                                    base_price = candle[1]  # 시가
                                     break
 
                             if base_price is None and len(ohlcv) > 0:
-                                base_price = ohlcv[0][1]
+                                base_price = ohlcv[0][1]  # 첫 캔들 시가
 
                             if base_price and base_price > 0:
                                 change_pct_since_9am = ((current_price - base_price) / base_price) * 100
@@ -9600,39 +9595,24 @@ class OneMinuteSurgeEntryStrategy:
                             change_pct_since_9am = 0
 
                     except Exception as e:
+                        # 변동률 계산 Failed시 0으로 Process
                         change_pct_since_9am = 0
-                        if idx < 3:  # Debug first 3 only
-                            print(f"   ⚠️ [{symbol}] 09:00 calculation failed: {e}")
+                        # 디버깅: First 3count만 Error 출력
+                        if idx < 3:
+                            print(f"   ⚠️ [{symbol}] 09:00 변동률 계산 Failed: {e}")
 
-                    return (symbol, change_pct_since_9am, volume_24h, ticker)
+                    # 09:00 이후 변동률로 Update
+                    candidate_symbols.append((symbol, change_pct_since_9am, volume_24h, ticker))
 
-                # Parallel processing with ThreadPoolExecutor
-                from concurrent.futures import ThreadPoolExecutor, as_completed
-                max_workers = 20  # Safe parallelization to avoid IP ban
+                    # Progress Situation 표시 (100count마다)
+                    if (idx + 1) % 100 == 0:
+                        print(f"   ⏳ 09:00 이후 변동률 계산 중... {idx + 1}/{len(top_symbols)}")
 
-                # Add index to top_symbols for debugging
-                indexed_symbols = [(idx, s, c, v, t) for idx, (s, c, v, t) in enumerate(top_symbols)]
+                    # 디버깅: First 3count 결과 출력
+                    if idx < 3:
+                        print(f"   🔍 [{symbol}] Current price: ${current_price:.2f}, 09:00 이후 변동률: {change_pct_since_9am:.2f}%")
 
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    futures = {executor.submit(calculate_9am_change, sym_data): sym_data[1]
-                              for sym_data in indexed_symbols}
-
-                    completed = 0
-                    for future in as_completed(futures):
-                        try:
-                            result = future.result(timeout=5)
-                            candidate_symbols.append(result)
-                            completed += 1
-
-                            # Progress every 100 symbols
-                            if completed % 100 == 0:
-                                print(f"   ⚡ Processing: {completed}/{len(top_symbols)}", end='\r')
-
-                        except Exception as e:
-                            symbol = futures[future]
-                            print(f"   ⚠️ [{symbol}] Processing failed: {e}")
-
-                print(f"\n   ✅ Parallel processing complete: {len(candidate_symbols)} symbols")
+                    time.sleep(0.1)  # Rate limit 방지 (20ms → 100ms 증가)
 
                 # 📊 09:00 이후 변동률 통계
                 positive_count = sum(1 for _, change, _, _ in candidate_symbols if change > 0)
