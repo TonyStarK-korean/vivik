@@ -43,7 +43,7 @@ class Optimized2HFilter:
             self.cache_last_update[symbol] = datetime.now()
             
         except Exception as e:
-            print(f"2시간봉 캐시 업데이트 실패 {symbol}: {e}")
+            print(f"2시간봉 Cache 업데이트 Failed {symbol}: {e}")
     
     def batch_load_2h_data(self, symbols: List[str], exchange) -> Dict[str, List[Dict]]:
         """배치 방식으로 2시간봉 데이터 로드 (초기 캐시 생성용)"""
@@ -113,8 +113,8 @@ class Optimized2HFilter:
         
         # 대량 심볼 처리시 디버그 출력 최소화
         if len(candidate_symbols) <= 50:
-            print(f"🔍 DEBUG: OptimizedFilter 시작 - 후보 심볼 {len(candidate_symbols)}개")
-            print(f"🔍 DEBUG: 현재 2h 캐시 보유 심볼 수: {len(self.kline_2h_cache)}")
+            print(f"🔍 DEBUG: OptimizedFilter Starting - 후보 심볼 {len(candidate_symbols)}")
+            print(f"🔍 DEBUG: 현재 2h Cache 보유 심볼 수: {len(self.kline_2h_cache)}")
         
         for i, symbol_data in enumerate(candidate_symbols):
             if len(symbol_data) == 4:
@@ -129,7 +129,7 @@ class Optimized2HFilter:
             
             # 대량 심볼 처리시 상세 로깅 제한
             if i < 3 and len(candidate_symbols) <= 50:
-                print(f"🔍 DEBUG: [{i}] {symbol} - 변동률: {change_pct:.2f}%, 거래량: {volume_24h}")
+                print(f"🔍 DEBUG: [{i}] {symbol} - 변동률: {change_pct:.2f}%, Trade량: {volume_24h}")
             
             # 캐시 확인
             if symbol in self.kline_2h_cache and self._is_cache_valid(symbol):
@@ -138,7 +138,7 @@ class Optimized2HFilter:
                 
                 # 대량 심볼 처리시 캐시 상세 정보 제한
                 if i < 3 and len(candidate_symbols) <= 50:
-                    print(f"🔍 DEBUG: {symbol} - 캐시 히트, 캔들 수: {len(candles)}")
+                    print(f"🔍 DEBUG: {symbol} - Cache 히트, 캔들 수: {len(candles)}")
                 
                 # 🚀 4시간봉 조건: 4봉 이내 시가대비고가 2% 이상 1회 이상 (수정됨)
                 surge_found = False
@@ -169,21 +169,21 @@ class Optimized2HFilter:
                 # 대량 심볼 처리시 캐시 미스 로깅 제한
                 if i < 3 and len(candidate_symbols) <= 50:
                     cache_valid = self._is_cache_valid(symbol) if symbol in self.kline_2h_cache else False
-                    print(f"🔍 DEBUG: {symbol} - 캐시 미스 (캐시 존재: {symbol in self.kline_2h_cache}, 유효: {cache_valid}) - 모든 심볼 통과로 변경")
+                    print(f"🔍 DEBUG: {symbol} - Cache 미스 (Cache 존재: {symbol in self.kline_2h_cache}, 유효: {cache_valid}) - 모든 심볼 통과로 변경")
         
         duration = time.time() - start_time
         # 대량 심볼 처리시 요약 통계만 출력
         if len(candidate_symbols) <= 50:
             print(f"📊 DEBUG: OptimizedFilter 통계:")
-            print(f"  - 총 후보: {len(candidate_symbols)}개")
-            print(f"  - 캐시 히트: {cache_hits}개")
-            print(f"  - 캐시 미스: {cache_misses}개") 
-            print(f"  - 캐시 통과: {cache_passes}개")
-            print(f"  - 캐시 실패: {cache_failures}개")
-            print(f"  - 최종 통과: {len(filtered_symbols)}개")
+            print(f"  - 총 후보: {len(candidate_symbols)}")
+            print(f"  - Cache 히트: {cache_hits}")
+            print(f"  - Cache 미스: {cache_misses}") 
+            print(f"  - Cache 통과: {cache_passes}")
+            print(f"  - Cache Failed: {cache_failures}")
+            print(f"  - 최종 통과: {len(filtered_symbols)}")
         else:
             # 531개 등 대량 처리시 간단한 요약만
-            print(f"✅ OptimizedFilter 완료: {len(candidate_symbols)}개 → {len(filtered_symbols)}개 ({duration:.2f}초)")
+            print(f"✅ OptimizedFilter Complete: {len(candidate_symbols)} → {len(filtered_symbols)} ({duration:.2f}초)")
         
         return filtered_symbols
     

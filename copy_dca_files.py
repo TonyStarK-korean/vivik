@@ -21,7 +21,7 @@ dca_files = [
     "sent_notifications.json"
 ]
 
-print("DCA 관련 파일 복사 시작...")
+print("DCA 관련 파일 복사 Starting...")
 
 copied_count = 0
 for file_name in dca_files:
@@ -34,11 +34,11 @@ for file_name in dca_files:
             copied_count += 1
             print(f"[COPY] {file_name}")
         except Exception as e:
-            print(f"[ERR] {file_name} 복사 실패: {e}")
+            print(f"[ERR] {file_name} 복사 Failed: {e}")
     else:
         print(f"[WARN] {file_name} 파일 없음")
 
-print(f"\n[DONE] {copied_count}개 DCA 관련 파일 복사 완료")
+print(f"\n[DONE] {copied_count} DCA 관련 파일 복사 Complete")
 
 # vivik_clean 디렉토리의 파일 목록 확인
 print(f"\n[CHECK] vivik_clean 폴더 내용:")
@@ -50,4 +50,4 @@ for item in clean_dir.iterdir():
 for file in sorted(clean_files):
     print(f"  - {file}")
 
-print(f"\n총 {len(clean_files)}개 파일")
+print(f"\n총 {len(clean_files)} 파일")

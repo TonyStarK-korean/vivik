@@ -29,19 +29,19 @@ def main():
         )
         
         # 현재 활성 포지션 표시
-        print("=== 현재 활성 포지션 ===")
+        print("=== 현재 활성 Position ===")
         positions = dca_manager.load_data()
         
         active_positions = {k: v for k, v in positions.items() if v.get('is_active', False)}
         
         if not active_positions:
-            print("활성 포지션이 없습니다.")
+            print("활성 Position이 없습니다.")
             return
         
         for i, (symbol, pos) in enumerate(active_positions.items(), 1):
             print(f"{i}. {symbol}")
-            print(f"   진입가: ${pos['initial_entry_price']:.6f}")
-            print(f"   평단가: ${pos['average_price']:.6f}")
+            print(f"   Entry가: ${pos['initial_entry_price']:.6f}")
+            print(f"   Average price: ${pos['average_price']:.6f}")
             print(f"   수량: {pos['total_quantity']}")
             print(f"   단계: {pos['current_stage']}")
             
@@ -51,9 +51,9 @@ def main():
                 current_price = ticker['last']
                 profit_pct = (current_price - pos['average_price']) / pos['average_price'] * 100
                 print(f"   현재가: ${current_price:.6f}")
-                print(f"   수익률: {profit_pct:+.2f}%")
+                print(f"   Profit rate: {profit_pct:+.2f}%")
             except:
-                print("   현재가: 조회 실패")
+                print("   현재가: Retrieval Failed")
             print()
         
         # 청산할 포지션 선택
@@ -66,11 +66,11 @@ def main():
             symbol = list(active_positions.keys())[choice]
             position = active_positions[symbol]
             
-            print(f"\n선택된 포지션: {symbol}")
+            print(f"\n선택된 Position: {symbol}")
             confirm = input("정말로 전량 청산하시겠습니까? (yes/no): ")
             
             if confirm.lower() != 'yes':
-                print("청산이 취소되었습니다.")
+                print("Exit이 Cancelled되었습니다.")
                 return
             
             # 현재가 조회
@@ -85,17 +85,17 @@ def main():
             )
             
             if success:
-                print(f"✅ {symbol} 전량 청산 완료!")
+                print(f"✅ {symbol} 전량 Exit Complete!")
             else:
-                print(f"❌ {symbol} 청산 실패")
+                print(f"❌ {symbol} Exit Failed")
                 
         except (ValueError, IndexError):
-            print("잘못된 번호입니다.")
+            print("잘못된 times호입니다.")
         except KeyboardInterrupt:
-            print("\n청산이 취소되었습니다.")
+            print("\nExit이 Cancelled되었습니다.")
             
     except Exception as e:
-        print(f"오류 발생: {e}")
+        print(f"Error 발생: {e}")
 
 if __name__ == "__main__":
     main()

@@ -39,7 +39,7 @@ def upload_configs():
         print(f"\n❌ telegram_config.py 파일이 없습니다: {telegram_config}")
         return False
 
-    print("\n✅ Config 파일 확인 완료")
+    print("\n✅ Config 파일 Confirmed Complete")
     print(f"   - binance_config.py")
     print(f"   - telegram_config.py")
     print()
@@ -57,9 +57,9 @@ def upload_configs():
         result1 = subprocess.run(cmd1, shell=True, capture_output=True, text=True)
 
         if result1.returncode == 0:
-            print("✅ binance_config.py 업로드 완료")
+            print("✅ binance_config.py 업로드 Complete")
         else:
-            print(f"❌ binance_config.py 업로드 실패: {result1.stderr}")
+            print(f"❌ binance_config.py 업로드 Failed: {result1.stderr}")
             return False
 
         # telegram_config.py 업로드
@@ -68,14 +68,14 @@ def upload_configs():
         result2 = subprocess.run(cmd2, shell=True, capture_output=True, text=True)
 
         if result2.returncode == 0:
-            print("✅ telegram_config.py 업로드 완료")
+            print("✅ telegram_config.py 업로드 Complete")
         else:
-            print(f"❌ telegram_config.py 업로드 실패: {result2.stderr}")
+            print(f"❌ telegram_config.py 업로드 Failed: {result2.stderr}")
             return False
 
         print()
         print("=" * 70)
-        print("✅ 모든 파일 업로드 완료!")
+        print("✅ 모든 파일 업로드 Complete!")
         print("=" * 70)
         print()
 
@@ -92,25 +92,25 @@ def upload_configs():
         restart = input("VPS에서 봇을 자동으로 재시작하시겠습니까? (y/n): ").strip().lower()
 
         if restart == 'y':
-            print("\n🚀 봇 재시작 중...")
+            print("\n🚀 봇 재Starting 중...")
             restart_cmd = f'ssh {vps_user}@{vps_ip} "cd {vps_path} && pkill -f one_minute_surge_entry_strategy.py; sleep 2; nohup python3 one_minute_surge_entry_strategy.py > trading_bot.log 2>&1 & echo \'봇 시작됨\'"'
             result = subprocess.run(restart_cmd, shell=True, capture_output=True, text=True)
 
             if result.returncode == 0:
-                print("✅ 봇 재시작 완료")
+                print("✅ 봇 재Starting Complete")
                 print(result.stdout)
             else:
-                print(f"⚠️ 봇 재시작 실패: {result.stderr}")
+                print(f"⚠️ 봇 재Starting Failed: {result.stderr}")
 
         return True
 
     except Exception as e:
-        print(f"\n❌ 업로드 중 오류 발생: {e}")
+        print(f"\n❌ 업로드 중 Error 발생: {e}")
         return False
 
 if __name__ == "__main__":
     try:
         upload_configs()
     except KeyboardInterrupt:
-        print("\n\n❌ 사용자가 취소했습니다.")
+        print("\n\n❌ 사용자가 Cancelled했습니다.")
         sys.exit(1)

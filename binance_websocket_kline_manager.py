@@ -1,12 +1,12 @@
 """
-python-binance 라이브러리를 사용한 Binance WebSocket Kline Manager
+python-binance 라이브러리를 Usage한 Binance WebSocket Kline Manager
 공식 라이브러리 기반으로 안정적이고 신뢰성 있는 구현
 
 주요 기능:
-- python-binance BinanceSocketManager 사용
-- 여러 심볼의 1분봉 실시간 데이터 수신
-- 자동 재연결 및 오류 처리
-- 동적 심볼 구독/해제
+- python-binance BinanceSocketManager Usage
+- 여러 Symbol의 1minute candles 실Time 데이터 수신
+- 자동 재Connections 및 Error Process
+- 동적 Symbol Subscription/Release
 - 스레드 안전성 보장
 """
 
@@ -22,17 +22,17 @@ from binance.client import Client
 
 class BinanceWebSocketKlineManager:
     """
-    python-binance 라이브러리 기반 WebSocket Kline 스트림 관리자
+    python-binance 라이브러리 기반 WebSocket Kline 스트림 Admin
     
-    ThreadedWebsocketManager를 사용하여 안정적인 실시간 가격 데이터를 제공합니다.
+    ThreadedWebsocketManager를 Usage하여 안정적인 실Time 가격 데이터를 제공합니다.
     """
     
     def __init__(self, callback: Callable, logger: Optional[logging.Logger] = None):
         """
-        WebSocket 매니저 초기화
+        WebSocket 매니저 Initialize
         
         Args:
-            callback: 가격 업데이트 콜백 함수 (symbol, price, kline_data)
+            callback: 가격 Update Callback 함수 (symbol, price, kline_data)
             logger: 로깅 객체
         """
         self.callback = callback
@@ -43,7 +43,7 @@ class BinanceWebSocketKlineManager:
         self.is_running = False
         self.is_connected = False
         
-        # 구독 관리
+        # Subscription management
         self.subscribed_symbols: Set[str] = set()
         self.stream_keys: Dict[str, str] = {}  # symbol -> stream_key 매핑
         
@@ -52,7 +52,7 @@ class BinanceWebSocketKlineManager:
         self.error_count = 0
         self.last_message_time = 0
         
-        # 데이터 버퍼 (심볼-타임프레임별 kline 데이터 저장)
+        # 데이터 버퍼 (Symbol-Timeframe별 kline 데이터 Save)
         self.kline_buffer: Dict[str, List] = {}
         
         # 스레드 안전성
@@ -60,23 +60,23 @@ class BinanceWebSocketKlineManager:
         
     def start(self, max_retries: int = 3, retry_delay: int = 2) -> bool:
         """
-        WebSocket 연결 시작
+        WebSocket Connections Starting
         
         Args:
-            max_retries: 최대 재시도 횟수
-            retry_delay: 재시도 간격 (초)
+            max_retries: 최대 재Attempt 횟수
+            retry_delay: 재Attempt 간격 (초)
             
         Returns:
-            bool: 연결 성공 여부
+            bool: Connections Success 여부
         """
         if self.is_running:
             return True
             
         for attempt in range(max_retries + 1):
             try:
-                self.logger.info(f"WebSocket 연결 시도 {attempt + 1}/{max_retries + 1}")
+                self.logger.info(f"WebSocket connection attempt {attempt + 1}/{max_retries + 1}")
                 
-                # ThreadedWebsocketManager 생성 (API 키 없이 public 스트림 사용)
+                # ThreadedWebsocketManager Create (API Key 없이 public 스트림 Usage)
                 self.twm = ThreadedWebsocketManager()
                 self.twm.start()
                 
@@ -84,20 +84,20 @@ class BinanceWebSocketKlineManager:
                 self.is_connected = True
                 self.last_message_time = time.time()
                 
-                self.logger.info("✅ python-binance WebSocket 시작 성공")
+                self.logger.info("✅ python-binance WebSocket Starting Success")
                 return True
                 
             except Exception as e:
-                self.logger.error(f"WebSocket 시작 실패 (시도 {attempt + 1}): {e}")
+                self.logger.error(f"WebSocket Starting Failed (Attempt {attempt + 1}): {e}")
                 self.stop()
                 if attempt < max_retries:
                     time.sleep(retry_delay)
                     
-        self.logger.error("WebSocket 연결 최종 실패")
+        self.logger.error("WebSocket Connections Final Failed")
         return False
         
     def stop(self):
-        """WebSocket 연결 종료"""
+        """WebSocket Connections Terminate"""
         self.is_running = False
         self.is_connected = False
         
@@ -108,12 +108,12 @@ class BinanceWebSocketKlineManager:
                     try:
                         self.twm.stop_socket(stream_key)
                     except Exception as e:
-                        self.logger.debug(f"스트림 중지 오류 ({symbol}): {e}")
+                        self.logger.debug(f"Stream stop error ({symbol}): {e}")
                 
-                # ThreadedWebsocketManager 종료
+                # ThreadedWebsocketManager Terminate
                 self.twm.stop()
             except Exception as e:
-                self.logger.debug(f"WebSocket 종료 오류: {e}")
+                self.logger.debug(f"WebSocket shutdown error: {e}")
             finally:
                 self.twm = None
                 
@@ -122,70 +122,70 @@ class BinanceWebSocketKlineManager:
         
     def _kline_callback_wrapper(self, symbol: str):
         """
-        심볼별 kline 콜백 래퍼 생성
+        Symbol별 kline Callback 래퍼 Create
         
         Args:
-            symbol: 구독할 심볼
+            symbol: Subscription할 Symbol
             
         Returns:
-            function: python-binance 콜백 함수
+            function: python-binance Callback 함수
         """
         def kline_callback(msg):
             try:
                 self.message_count += 1
                 self.last_message_time = time.time()
                 
-                # python-binance 메시지 형식 처리
+                # python-binance Message 형식 Process
                 if msg.get('e') == 'kline':
                     kline_data = msg
                     k = msg['k']
-                    price = float(k['c'])  # 현재가
+                    price = float(k['c'])  # Current price
                     
-                    # 데이터 버퍼에 저장 (1분봉 기준)
+                    # 데이터 버퍼에 Save (1minute candles 기준)
                     self._store_kline_data(symbol, '1m', kline_data)
                     
-                    # 다른 타임프레임 집계 생성
+                    # 다른 Timeframe 집계 Create
                     self._generate_higher_timeframes(symbol, kline_data)
                     
-                    # 사용자 콜백 호출
+                    # Usage자 Callback 호출
                     if self.callback:
                         try:
                             self.callback(symbol, price, kline_data)
                         except Exception as e:
-                            self.logger.error(f"콜백 처리 오류 ({symbol}): {e}")
+                            self.logger.error(f"Callback processing error ({symbol}): {e}")
                             
             except Exception as e:
-                self.logger.error(f"kline 콜백 오류 ({symbol}): {e}")
+                self.logger.error(f"kline Callback Error ({symbol}): {e}")
                 self.error_count += 1
                 
         return kline_callback
         
     def subscribe_symbol(self, symbol: str) -> bool:
         """
-        심볼 구독
+        Symbol Subscription
         
         Args:
-            symbol: 구독할 심볼 (예: "BTCUSDT")
+            symbol: Subscription할 Symbol (예: "BTCUSDT")
             
         Returns:
-            bool: 구독 성공 여부
+            bool: Subscription success 여부
         """
         if not self.is_running or not self.twm:
-            self.logger.error(f"WebSocket 미시작 - {symbol} 구독 불가 (running: {self.is_running}, twm: {self.twm is not None})")
+            self.logger.error(f"WebSocket not started - {symbol} subscription impossible (running: {self.is_running}, twm: {self.twm is not None})")
             return False
             
         with self.lock:
-            # 심볼 정규화
+            # Symbol 정규화
             clean_symbol = symbol.upper().replace('/', '').replace(':USDT', '')
             
             if clean_symbol in self.subscribed_symbols:
-                self.logger.debug(f"{clean_symbol} 이미 구독됨")
+                self.logger.debug(f"{clean_symbol} Already subscribed")
                 return True
                 
             try:
-                self.logger.debug(f"구독 시도: {clean_symbol}")
+                self.logger.debug(f"Subscription attempt: {clean_symbol}")
                 
-                # python-binance kline 스트림 시작
+                # python-binance kline 스트림 Starting
                 callback = self._kline_callback_wrapper(clean_symbol)
                 stream_key = self.twm.start_kline_socket(
                     callback=callback,
@@ -194,31 +194,31 @@ class BinanceWebSocketKlineManager:
                 )
                 
                 if stream_key:
-                    # 구독 정보 저장
+                    # Subscription Info Save
                     self.subscribed_symbols.add(clean_symbol)
                     self.stream_keys[clean_symbol] = stream_key
                     
-                    self.logger.info(f"✅ {clean_symbol} 구독 성공 (키: {stream_key})")
+                    self.logger.info(f"✅ {clean_symbol} Subscription success (Key: {stream_key})")
                     return True
                 else:
-                    self.logger.error(f"❌ {clean_symbol} 구독 실패 - stream_key None")
+                    self.logger.error(f"❌ {clean_symbol} Subscription failed - stream_key None")
                     return False
                 
             except Exception as e:
-                self.logger.error(f"❌ {clean_symbol} 구독 예외: {e}")
+                self.logger.error(f"❌ {clean_symbol} Subscription exception: {e}")
                 import traceback
-                self.logger.error(f"상세 오류: {traceback.format_exc()}")
+                self.logger.error(f"Detailed error: {traceback.format_exc()}")
                 return False
                 
     def unsubscribe_symbol(self, symbol: str) -> bool:
         """
-        심볼 구독 해제
+        Symbol Unsubscribe
         
         Args:
-            symbol: 구독 해제할 심볼
+            symbol: Unsubscribe할 Symbol
             
         Returns:
-            bool: 구독 해제 성공 여부
+            bool: Unsubscribe Success 여부
         """
         if not self.is_running or not self.twm:
             return True
@@ -235,38 +235,38 @@ class BinanceWebSocketKlineManager:
                 if stream_key:
                     self.twm.stop_socket(stream_key)
                     
-                # 구독 정보 제거
+                # Subscription Info Remove
                 self.subscribed_symbols.discard(clean_symbol)
                 self.stream_keys.pop(clean_symbol, None)
                 
-                self.logger.debug(f"❌ {clean_symbol} 구독 해제")
+                self.logger.debug(f"❌ {clean_symbol} Unsubscribe")
                 return True
                 
             except Exception as e:
-                self.logger.error(f"구독 해제 실패 ({clean_symbol}): {e}")
+                self.logger.error(f"Unsubscribe Failed ({clean_symbol}): {e}")
                 return False
                 
     def subscribe_batch(self, symbols: List[str], timeframes: List[str] = None, 
                        load_history: bool = False, batch_size: int = None, 
                        delay: float = 0.01, max_workers: int = None) -> int:
         """
-        여러 심볼 일괄 구독 (전략 호환성을 위한 확장 파라미터 지원)
+        여러 Symbol 일괄 Subscription (전략 호환성을 위한 확장 파라미터 지원)
         
         Args:
-            symbols: 구독할 심볼 리스트
-            timeframes: 타임프레임 리스트 (현재는 1m만 지원하므로 무시)
-            load_history: 히스토리 로드 여부 (현재 미지원, 무시)
-            batch_size: 배치 크기 (현재 미사용)
-            delay: 구독 간 지연 시간
-            max_workers: 최대 워커 수 (현재 미사용)
+            symbols: Subscription할 Symbol 리스트
+            timeframes: Timeframe 리스트 (Current는 1m만 지원하므로 무시)
+            load_history: 히스토리 Load 여부 (Current 미지원, 무시)
+            batch_size: Batch Size (Current 미Usage)
+            delay: Subscription 간 지연 Time
+            max_workers: 최대 워커 수 (Current 미Usage)
             
         Returns:
-            int: 성공한 구독 수
+            int: Success한 Subscription 수
         """
         if timeframes:
-            self.logger.info(f"배치 구독 시작: {len(symbols)} 심볼, 타임프레임: {timeframes}")
+            self.logger.info(f"Batch subscription start: {len(symbols)} Symbol, Timeframe: {timeframes}")
         else:
-            self.logger.info(f"배치 구독 시작: {len(symbols)} 심볼")
+            self.logger.info(f"Batch subscription start: {len(symbols)} Symbol")
             
         success_count = 0
         
@@ -275,26 +275,26 @@ class BinanceWebSocketKlineManager:
                 if self.subscribe_symbol(symbol):
                     success_count += 1
                 else:
-                    self.logger.warning(f"구독 실패: {symbol}")
+                    self.logger.warning(f"Subscription failed: {symbol}")
             except Exception as e:
-                self.logger.error(f"구독 오류 ({symbol}): {e}")
+                self.logger.error(f"Subscription Error ({symbol}): {e}")
                 
-            # 구독 간 지연 (python-binance 안정성을 위해)
+            # Subscription 간 지연 (python-binance 안정성을 위해)
             if delay > 0:
                 time.sleep(delay)
             
-        self.logger.info(f"일괄 구독 완료: {success_count}/{len(symbols)} 성공")
+        self.logger.info(f"Batch subscription complete: {success_count}/{len(symbols)} Success")
         return success_count
         
     def unsubscribe_batch(self, symbols: List[str]) -> int:
         """
-        여러 심볼 일괄 구독 해제
+        여러 Symbol Batch unsubscribe complete
         
         Args:
-            symbols: 구독 해제할 심볼 리스트
+            symbols: Unsubscribe할 Symbol 리스트
             
         Returns:
-            int: 성공한 구독 해제 수
+            int: Success한 Unsubscribe 수
         """
         success_count = 0
         
@@ -302,16 +302,16 @@ class BinanceWebSocketKlineManager:
             if self.unsubscribe_symbol(symbol):
                 success_count += 1
                 
-        self.logger.info(f"일괄 구독 해제: {success_count}/{len(symbols)} 성공")
+        self.logger.info(f"Batch unsubscribe complete: {success_count}/{len(symbols)} Success")
         return success_count
         
     def get_subscribed_symbols(self) -> Set[str]:
-        """현재 구독 중인 심볼 목록 반환"""
+        """Current Subscription 중인 Symbol 목록 반환"""
         with self.lock:
             return self.subscribed_symbols.copy()
             
     def get_stats(self) -> dict:
-        """WebSocket 통계 정보 반환"""
+        """WebSocket 통계 Info 반환"""
         return {
             'is_connected': self.is_connected,
             'is_running': self.is_running,
@@ -323,15 +323,15 @@ class BinanceWebSocketKlineManager:
         }
         
     def is_healthy(self) -> bool:
-        """WebSocket 상태 건강성 체크"""
+        """WebSocket Status 건강성 체크"""
         if not self.is_connected or not self.is_running:
             return False
             
-        # ThreadedWebsocketManager 상태 체크
+        # ThreadedWebsocketManager Status 체크
         if not self.twm:
             return False
             
-        # 30초 이상 메시지가 없으면 비정상 (구독이 있는 경우)
+        # 30초 이상 Message가 없으면 비정상 (Subscription이 있는 경우)
         if len(self.subscribed_symbols) > 0 and self.last_message_time > 0:
             age = time.time() - self.last_message_time
             if age > 30:
@@ -340,16 +340,16 @@ class BinanceWebSocketKlineManager:
         return True
     
     def _store_kline_data(self, symbol: str, timeframe: str, kline_data: dict):
-        """Kline 데이터를 버퍼에 저장"""
+        """Kline 데이터를 버퍼에 Save"""
         try:
             with self.lock:
-                # 버퍼 키 생성
+                # 버퍼 Key Create
                 buffer_key = f"{symbol}_{timeframe}"
                 
                 if buffer_key not in self.kline_buffer:
                     self.kline_buffer[buffer_key] = []
                 
-                # Kline 데이터에서 필요한 정보 추출
+                # Kline 데이터에서 Required한 Info 추출
                 k = kline_data.get('k', {})
                 candle = {
                     'timestamp': k.get('t', 0),
@@ -359,27 +359,27 @@ class BinanceWebSocketKlineManager:
                     'close': float(k.get('c', 0)),
                     'volume': float(k.get('v', 0)),
                     'close_time': k.get('T', 0),
-                    'is_final': k.get('x', False)  # 캔들 완료 여부
+                    'is_final': k.get('x', False)  # 캔들 Complete 여부
                 }
                 
-                # 기존 데이터가 있으면 마지막 캔들 업데이트, 없으면 추가
+                # Legacy 데이터가 있으면 마지막 캔들 Update, 없으면 Add
                 buffer = self.kline_buffer[buffer_key]
                 if buffer and buffer[-1]['timestamp'] == candle['timestamp']:
-                    # 같은 타임스탬프의 캔들 업데이트
+                    # 같은 타임스탬프의 캔들 Update
                     buffer[-1] = candle
                 else:
-                    # 새로운 캔들 추가
+                    # New 캔들 Add
                     buffer.append(candle)
                 
-                # 버퍼 크기 제한 (최대 1500개)
+                # 버퍼 Size 제한 (최대 1500count)
                 if len(buffer) > 1500:
                     self.kline_buffer[buffer_key] = buffer[-1500:]
         
         except Exception as e:
-            self.logger.error(f"Kline 데이터 저장 실패 ({symbol}, {timeframe}): {e}")
+            self.logger.error(f"Kline data save failed ({symbol}, {timeframe}): {e}")
     
     def get_kline_buffer(self, symbol: str, timeframe: str, limit: int = 1000, as_dataframe: bool = True):
-        """버퍼에서 Kline 데이터 조회"""
+        """버퍼에서 Kline 데이터 조times"""
         try:
             with self.lock:
                 buffer_key = f"{symbol}_{timeframe}"
@@ -389,7 +389,7 @@ class BinanceWebSocketKlineManager:
                 
                 buffer = self.kline_buffer[buffer_key]
                 
-                # 최신 limit개 선택
+                # 최신 limitcount 선택
                 if limit > 0:
                     selected_data = buffer[-limit:] if len(buffer) > limit else buffer
                 else:
@@ -419,13 +419,13 @@ class BinanceWebSocketKlineManager:
                     return selected_data
         
         except Exception as e:
-            self.logger.error(f"Kline 버퍼 조회 실패 ({symbol}, {timeframe}): {e}")
+            self.logger.error(f"Kline Buffer 조times Failed ({symbol}, {timeframe}): {e}")
             return pd.DataFrame() if as_dataframe else []
     
     def _generate_higher_timeframes(self, symbol: str, kline_data: dict):
-        """1분봉 데이터로부터 다른 타임프레임 집계 생성"""
+        """1minute candles 데이터로부터 다른 Timeframe 집계 Create"""
         try:
-            # 타임프레임별 분 단위
+            # Timeframe별 분 단위
             timeframe_minutes = {
                 '3m': 3,
                 '5m': 5,
@@ -438,9 +438,9 @@ class BinanceWebSocketKlineManager:
             if not timestamp:
                 return
             
-            # 각 타임프레임별로 집계
+            # 각 Timeframe별로 집계
             for tf, minutes in timeframe_minutes.items():
-                # 타임스탬프를 해당 타임프레임의 시작 시간으로 맞춤
+                # 타임스탬프를 해당 Timeframe의 Starting Time으로 맞춤
                 aligned_timestamp = self._align_timestamp(timestamp, minutes)
                 
                 with self.lock:
@@ -451,9 +451,9 @@ class BinanceWebSocketKlineManager:
                     
                     buffer = self.kline_buffer[buffer_key]
                     
-                    # 기존 캔들이 있고 같은 타임스탬프면 업데이트
+                    # Legacy 캔들이 있고 같은 타임스탬프면 Update
                     if buffer and buffer[-1]['timestamp'] == aligned_timestamp:
-                        # 기존 캔들 업데이트
+                        # Legacy 캔들 Update
                         existing = buffer[-1]
                         existing['high'] = max(existing['high'], float(k.get('h', 0)))
                         existing['low'] = min(existing['low'], float(k.get('l', 0)))
@@ -462,7 +462,7 @@ class BinanceWebSocketKlineManager:
                         existing['close_time'] = k.get('T', 0)
                         existing['is_final'] = k.get('x', False)
                     else:
-                        # 새로운 캔들 생성
+                        # New 캔들 Create
                         new_candle = {
                             'timestamp': aligned_timestamp,
                             'open': float(k.get('o', 0)),
@@ -475,12 +475,12 @@ class BinanceWebSocketKlineManager:
                         }
                         buffer.append(new_candle)
                     
-                    # 버퍼 크기 제한
+                    # 버퍼 Size 제한
                     if len(buffer) > 1500:
                         self.kline_buffer[buffer_key] = buffer[-1500:]
         
         except Exception as e:
-            self.logger.error(f"상위 타임프레임 생성 실패 ({symbol}): {e}")
+            self.logger.error(f"상위 Timeframe Create Failed ({symbol}): {e}")
     
     def _align_timestamp(self, timestamp: int, minutes: int) -> int:
         """타임스탬프를 지정된 분 단위로 정렬"""
@@ -498,22 +498,22 @@ class BinanceWebSocketKlineManager:
             return aligned_minutes * 60 * 1000
         
         except Exception as e:
-            self.logger.error(f"타임스탬프 정렬 실패 ({timestamp}, {minutes}): {e}")
+            self.logger.error(f"Timestamp alignment failed ({timestamp}, {minutes}): {e}")
             return timestamp
 
 
-# 사용 예시
+# Usage 예시
 if __name__ == "__main__":
     import logging
     
-    # 로깅 설정
+    # 로깅 Settings
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     logger = logging.getLogger(__name__)
     
-    # 메시지 카운터
+    # Message 카운터
     message_count = 0
     received_symbols = set()
     
@@ -525,51 +525,51 @@ if __name__ == "__main__":
         if message_count <= 5:
             print(f"[CALLBACK] {symbol}: ${price:.2f}")
     
-    # WebSocket 매니저 생성 및 테스트
+    # WebSocket 매니저 Create 및 Test
     manager = BinanceWebSocketKlineManager(price_callback, logger)
     
     try:
-        print("=== python-binance WebSocket 테스트 시작 ===")
+        print("=== python-binance WebSocket Test Starting ===")
         
-        # 시작
+        # Starting
         if manager.start():
-            print("✅ WebSocket 시작 성공")
+            print("✅ WebSocket Starting Success")
             
-            # 테스트 심볼 구독
+            # Test Symbol Subscription
             test_symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
             success_count = manager.subscribe_batch(test_symbols)
-            print(f"구독 성공: {success_count}/{len(test_symbols)}")
+            print(f"Subscription success: {success_count}/{len(test_symbols)}")
             
-            # 15초 동안 데이터 수신 테스트
-            print("15초 동안 데이터 수신 테스트...")
+            # 15초 동안 데이터 수신 Test
+            print("15초 동안 데이터 Received Test...")
             time.sleep(15)
             
             # 통계 출력
             stats = manager.get_stats()
-            print(f"\n📊 테스트 결과:")
-            print(f"  - 총 메시지 수신: {message_count}")
-            print(f"  - 수신된 심볼: {len(received_symbols)} ({', '.join(received_symbols)})")
-            print(f"  - 연결 상태: {'✅ 정상' if stats['is_connected'] else '❌ 끊김'}")
-            print(f"  - 구독 중인 심볼: {stats['subscribed_count']}개")
+            print(f"\n📊 Test 결과:")
+            print(f"  - 총 Message Received: {message_count}")
+            print(f"  - Received된 Symbol: {len(received_symbols)} ({', '.join(received_symbols)})")
+            print(f"  - Connections Status: {'✅ 정상' if stats['is_connected'] else '❌ 끊김'}")
+            print(f"  - Subscription 중인 Symbol: {stats['subscribed_count']}count")
             print(f"  - 스트림 수: {stats['stream_count']}")
-            print(f"  - 마지막 메시지: {stats['last_message_age']:.1f}초 전")
-            print(f"  - 건강성: {'✅ 정상' if manager.is_healthy() else '❌ 비정상'}")
+            print(f"  - 마지막 Message: {stats['last_message_age']:.1f}초 전")
+            print(f"  - 강성: {'✅ 정상' if manager.is_healthy() else '❌ 비정상'}")
             
             if message_count > 0:
                 print("🎉 python-binance WebSocket 매니저 정상 작동!")
             else:
-                print("⚠️ 메시지 수신 없음")
+                print("⚠️ Message Received Absent")
                 
         else:
-            print("❌ WebSocket 시작 실패")
+            print("❌ WebSocket Starting Failed")
             
     except KeyboardInterrupt:
-        print("\n🛑 사용자에 의한 중단")
+        print("\n🛑 Usage자에 의한 중단")
         
     except Exception as e:
-        print(f"❌ 테스트 중 오류: {e}")
+        print(f"❌ Test 중 Error: {e}")
         
     finally:
-        print("🔌 WebSocket 연결 종료 중...")
+        print("🔌 Closing WebSocket connection...")
         manager.stop()
-        print("✅ 테스트 완료")
+        print("✅ Test Complete")

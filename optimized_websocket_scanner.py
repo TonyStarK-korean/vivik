@@ -56,11 +56,11 @@ class OptimizedWebSocketScanner:
         # 동기화 락
         self.data_lock = threading.Lock()
         
-        print("🚀 최적화된 WebSocket 스캐너 초기화 완료")
+        print("🚀 최적화된 WebSocket 스캐너 Initialization Complete")
     
     def start_optimized_scan(self):
         """최적화된 스캔 시작"""
-        print("⚡ 100% WebSocket 기반 스캔 시작")
+        print("⚡ 100% WebSocket 기반 스캔 Starting")
         
         while True:
             try:
@@ -89,7 +89,7 @@ class OptimizedWebSocketScanner:
                 time.sleep(max(0, self.scan_interval - scan_time))
                 
             except Exception as e:
-                print(f"❌ 스캔 오류: {e}")
+                print(f"❌ 스캔 Error: {e}")
                 time.sleep(1)
     
     def _sync_websocket_data(self):
@@ -149,7 +149,7 @@ class OptimizedWebSocketScanner:
                         symbol_obj.last_update = time.time()
                         
         except Exception as e:
-            print(f"⚠️ WebSocket 데이터 동기화 오류: {e}")
+            print(f"⚠️ WebSocket 데이터 동기화 Error: {e}")
     
     def _get_scan_ready_symbols(self) -> List[str]:
         """스캔 준비된 심볼 목록 반환"""
@@ -361,7 +361,7 @@ class OptimizedWebSocketScanner:
                 self.strategy._execute_entry_signal(signal)
                 
             except Exception as e:
-                print(f"❌ 신호 처리 실패: {e}")
+                print(f"❌ 신호 Processing Failed: {e}")
     
     def _update_scan_stats(self, scan_time: float, success: bool):
         """스캔 통계 업데이트"""
@@ -381,7 +381,7 @@ class OptimizedWebSocketScanner:
             success_rate = (self.scan_stats['successful_scans'] / 
                           self.scan_stats['total_scans'] * 100)
             
-            print(f"📊 스캔 통계: 성공률 {success_rate:.1f}%, "
+            print(f"📊 스캔 통계: Success률 {success_rate:.1f}%, "
                  f"평균 {self.scan_stats['avg_scan_time']:.2f}초, "
                  f"신호 {self.scan_stats['signals_found']}개")
     

@@ -5,7 +5,7 @@
 
 def analyze_strategy_conditions():
     """전략 조건들 분석"""
-    print("=== 전체 전략 조건 분석 ===")
+    print("=== 전체 전략 조 분석 ===")
     
     strategies = {
         "전략A": {
@@ -63,12 +63,12 @@ def analyze_strategy_conditions():
         }
     }
     
-    print("\n=== 전략별 조건 분석 ===")
+    print("\n=== 전략별 조 분석 ===")
     for strategy_key, strategy in strategies.items():
         print(f"\n{strategy_key}: {strategy['name']}")
         print(f"난이도: {strategy['difficulty']}")
-        print(f"성공 확률: {strategy['probability']}")
-        print("조건들:")
+        print(f"Success 확률: {strategy['probability']}")
+        print("조들:")
         for i, condition in enumerate(strategy['conditions'], 1):
             print(f"  {i}. {condition}")
     
@@ -105,7 +105,7 @@ def analyze_strategy_conditions():
         for detail in details:
             print(f"  - {detail}")
     
-    print("\n=== 개선 방안 (확률 높은 조건 위주) ===")
+    print("\n=== 선 방안 (확률 높은 조 위주) ===")
     
     improvements = {
         "즉시 개선 (확률 중심)": [
@@ -138,11 +138,11 @@ def analyze_strategy_conditions():
             print(f"  - {item}")
     
     print("\n=== 추천 수정 사항 ===")
-    print("1. 전략D (5분봉 초강력타점)만 활성화")
+    print("1. 전략D (5분봉 초강력타점)만 Activated")
     print("2. MA480 → MA200 변경")  
-    print("3. 일봉 조건 완화 (15% → 10%)")
-    print("4. SuperTrend 조건 선택적 적용")
-    print("5. 나머지 전략들은 시장 활성화 시까지 비활성화")
+    print("3. 일봉 조 완화 (15% → 10%)")
+    print("4. SuperTrend 조 선택적 적용")
+    print("5. 나머지 전략들은 시장 Activated 시까지 비Activated")
 
 if __name__ == "__main__":
     analyze_strategy_conditions()

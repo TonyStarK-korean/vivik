@@ -10,13 +10,13 @@ from datetime import datetime
 def monitor_websocket_data():
     """실시간 WebSocket 데이터 수신 모니터링"""
     try:
-        print("=== 실시간 WebSocket 데이터 수신 모니터링 ===")
+        print("=== 실시간 WebSocket 데이터 Received 모니터링 ===")
         
         # 전략 임포트
         from one_minute_surge_entry_strategy import OneMinuteSurgeEntryStrategy
         
         # 전략 초기화
-        print("전략 초기화 중...")
+        print("전략 Initialization 중...")
         strategy = OneMinuteSurgeEntryStrategy(
             api_key=None,
             secret_key=None,
@@ -24,11 +24,11 @@ def monitor_websocket_data():
         )
         
         # 10초 대기하여 WebSocket 연결 안정화
-        print("WebSocket 연결 안정화 대기... (10초)")
+        print("WebSocket Connected 안정화 Waiting... (10초)")
         time.sleep(10)
         
         # 15초간 실시간 모니터링
-        print("\n=== 15초간 실시간 데이터 수신 모니터링 ===")
+        print("\n=== 15초간 실시간 데이터 Received 모니터링 ===")
         start_time = time.time()
         last_buffer_size = 0
         
@@ -74,21 +74,21 @@ def monitor_websocket_data():
                                         close_price = latest.get('close', 0)
                                         surge_pct = ((high_price - open_price) / open_price * 100) if open_price > 0 else 0
                                         dt = datetime.fromtimestamp(timestamp/1000) if timestamp else "N/A"
-                                        print(f"    {first_symbol}: {len(candles)}개 캔들, 최신({dt}): "
+                                        print(f"    {first_symbol}: {len(candles)} 캔들, 최신({dt}): "
                                               f"O:{open_price:.6f} H:{high_price:.6f} C:{close_price:.6f} 급등:{surge_pct:.2f}%")
                         else:
                             print(f"[{datetime.now().strftime('%H:%M:%S')}] "
                                   f"연결: {connected_count}/{len(subscribed)}, "
                                   f"버퍼: {buffer_size}개, 4h: 0개")
                     else:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] WebSocket 버퍼 없음")
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] WebSocket Buffer 없음")
                 else:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] WebSocket 매니저 비활성화")
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] WebSocket 매니저 비Activated")
                 
                 time.sleep(2)  # 2초마다 체크
                 
             except Exception as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 모니터링 오류: {e}")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 모니터링 Error: {e}")
                 time.sleep(2)
         
         print("\n=== 최종 상태 분석 ===")
@@ -96,7 +96,7 @@ def monitor_websocket_data():
         # 최종 WebSocket 버퍼 분석
         if hasattr(strategy, '_websocket_kline_buffer') and strategy._websocket_kline_buffer:
             buffer = strategy._websocket_kline_buffer
-            print(f"총 버퍼 크기: {len(buffer)}개")
+            print(f"총 Buffer 크기: {len(buffer)}")
             
             # 타임프레임별 분석
             tf_stats = {}
@@ -109,10 +109,10 @@ def monitor_websocket_data():
             
             for tf, symbols in tf_stats.items():
                 avg_candles = sum(count for _, count in symbols) / len(symbols)
-                print(f"{tf}: {len(symbols)}개 심볼, 평균 {avg_candles:.1f}개 캔들")
+                print(f"{tf}: {len(symbols)} 심볼, 평균 {avg_candles:.1f} 캔들")
             
             # 4시간봉 급등 조건 테스트
-            print("\n=== 4시간봉 급등 조건 테스트 ===")
+            print("\n=== 4시간봉 급등 조 테스트 ===")
             h4_symbols = [k for k in buffer.keys() if k.endswith('_4h')]
             surge_count = 0
             
@@ -128,21 +128,21 @@ def monitor_websocket_data():
                                 if surge_pct >= 2.0:
                                     surge_count += 1
                                     symbol_name = symbol_key.replace('_4h', '')
-                                    print(f"  ✅ {symbol_name}: {surge_pct:.2f}% 급등 (조건 만족)")
+                                    print(f"  ✅ {symbol_name}: {surge_pct:.2f}% 급등 (조 만족)")
                                     break
             
-            print(f"급등 조건 만족: {surge_count}개/{min(len(h4_symbols), 5)}개 테스트")
+            print(f"급등 조 만족: {surge_count}/{min(len(h4_symbols), 5)} 테스트")
         else:
-            print("WebSocket 버퍼 없음")
+            print("WebSocket Buffer 없음")
         
         # 정리
         if hasattr(strategy, 'ws_kline_manager') and strategy.ws_kline_manager:
             strategy.ws_kline_manager.shutdown()
         
-        print("\n=== 모니터링 완료 ===")
+        print("\n=== 모니터링 Complete ===")
         
     except Exception as e:
-        print(f"❌ 모니터링 실패: {e}")
+        print(f"❌ 모니터링 Failed: {e}")
         import traceback
         traceback.print_exc()
 

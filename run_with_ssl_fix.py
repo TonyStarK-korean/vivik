@@ -16,7 +16,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # SSL 검증 비활성화
 ssl._create_default_https_context = ssl._create_unverified_context
 
-print("🔓 SSL 검증 비활성화 완료")
+print("🔓 SSL 검증 비Activated Complete")
 print("🚀 메인 스크립트 실행 중...\n")
 
 # 메인 스크립트 실행

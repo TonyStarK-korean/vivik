@@ -31,7 +31,7 @@ def create_scp_commands():
         print(f"❌ telegram_config.py 파일을 찾을 수 없습니다: {telegram_config}")
         return False
 
-    print("✅ Config 파일 확인 완료")
+    print("✅ Config 파일 Confirmed Complete")
     print(f"   - binance_config.py: {os.path.getsize(binance_config)} bytes")
     print(f"   - telegram_config.py: {os.path.getsize(telegram_config)} bytes")
     print()
@@ -75,12 +75,12 @@ def create_scp_commands():
     print(f'scp "{telegram_win}" {vps_user}@{vps_ip}:{vps_path}/')
     print()
 
-    print("# 3. 두 파일을 한 번에 업로드")
+    print("# 3. 두 파일을 한 times에 업로드")
     print(f'scp "{binance_win}" "{telegram_win}" {vps_user}@{vps_ip}:{vps_path}/')
     print()
 
     print("=" * 70)
-    print("📝 업로드 후 VPS에서 확인")
+    print("📝 업로드 후 VPS에서 Confirmed")
     print("=" * 70)
     print()
     print(f"ssh {vps_user}@{vps_ip}")
@@ -89,7 +89,7 @@ def create_scp_commands():
     print()
 
     print("=" * 70)
-    print("🚀 봇 재시작")
+    print("🚀 봇 재Starting")
     print("=" * 70)
     print()
     print("pkill -f one_minute_surge_entry_strategy.py")
@@ -104,10 +104,10 @@ def main():
     try:
         create_scp_commands()
     except KeyboardInterrupt:
-        print("\n\n❌ 사용자가 취소했습니다.")
+        print("\n\n❌ 사용자가 Cancelled했습니다.")
         sys.exit(1)
     except Exception as e:
-        print(f"\n❌ 에러 발생: {e}")
+        print(f"\n❌ Error 발생: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

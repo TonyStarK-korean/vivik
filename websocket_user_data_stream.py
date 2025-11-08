@@ -349,7 +349,7 @@ if __name__ == "__main__":
 
     # 콜백 함수 등록
     def on_position_update(symbol, position):
-        print(f"[포지션 변경] {symbol}: {position}")
+        print(f"[Position 변경] {symbol}: {position}")
 
     def on_balance_update(asset, balance):
         print(f"[잔고 변경] {asset}: {balance}")

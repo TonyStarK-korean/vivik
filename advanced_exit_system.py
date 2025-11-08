@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-🎯 고급 청산 시스템 (Advanced Exit System)
+🎯 고급 Exit 시스템 (Advanced Exit System)
 SuperClaude Expert Mode Implementation
 
 핵심 기능:
 1. 적응형 손절 시스템 (ATR 기반 변동성별 손절 조정)
-2. 다단계 익절 시스템 (5%, 10%, 20%, 30% 단계별 분할 청산)  
-3. 스마트 트레일링 스톱 (수익률별 차등 트레일링)
-4. 복합 기술적 청산 (다중 지표 융합, 2개 이상 조건 충족시 청산)
+2. 다Stage 익절 시스템 (5%, 10%, 20%, 30% Stage별 분할 Exit)  
+3. 스마트 Trailing 스톱 (Profit ratio별 차등 Trailing)
+4. 복합 기술적 Exit (다중 지표 융합, 2count 이상 조건 충족시 Exit)
 """
 
 import pandas as pd
@@ -22,12 +22,12 @@ import ccxt
 import logging
 
 class ExitSignalType(Enum):
-    """청산 신호 타입"""
+    """Exit 신호 Type"""
     ADAPTIVE_STOP_LOSS = "adaptive_stop_loss"           # 적응형 손절
-    MULTI_LEVEL_PROFIT = "multi_level_profit"           # 다단계 익절
-    TRAILING_STOP = "trailing_stop"                     # 트레일링 스톱
-    TECHNICAL_EXIT = "technical_exit"                   # 복합 기술적 청산
-    EMERGENCY_EXIT = "emergency_exit"                   # 긴급 청산
+    MULTI_LEVEL_PROFIT = "multi_level_profit"           # 다Stage 익절
+    TRAILING_STOP = "trailing_stop"                     # Trailing 스톱
+    TECHNICAL_EXIT = "technical_exit"                   # 복합 기술적 Exit
+    EMERGENCY_EXIT = "emergency_exit"                   # 긴급 Exit
 
 class VolatilityLevel(Enum):
     """변동성 수준"""
@@ -38,41 +38,41 @@ class VolatilityLevel(Enum):
 
 @dataclass
 class ExitLevel:
-    """청산 레벨 정의"""
-    profit_threshold: float     # 수익률 임계값
-    exit_ratio: float          # 청산 비율
+    """Exit 레벨 정의"""
+    profit_threshold: float     # Profit ratio Threshold
+    exit_ratio: float          # Exit 비율
     name: str                  # 레벨 이름
-    is_executed: bool = False  # 실행 여부
+    is_executed: bool = False  # Execute 여부
 
 @dataclass
 class TrailingStopState:
-    """트레일링 스톱 상태"""
+    """Trailing 스톱 Status"""
     symbol: str
-    highest_price: float       # 최고가
-    trailing_price: float      # 트레일링 가격
-    trailing_pct: float        # 트레일링 비율
-    is_active: bool = False    # 활성 상태
-    activation_price: float = 0.0  # 활성화 가격
-    last_update: str = ""      # 마지막 업데이트
+    highest_price: float       # Highest price
+    trailing_price: float      # Trailing 가격
+    trailing_pct: float        # Trailing 비율
+    is_active: bool = False    # Active Status
+    activation_price: float = 0.0  # Active화 가격
+    last_update: str = ""      # 마지막 Update
 
 @dataclass 
 class TechnicalSignal:
     """기술적 신호"""
-    signal_type: str          # 신호 타입
+    signal_type: str          # 신호 Type
     strength: float           # 신호 강도 (0-1)
-    timestamp: str            # 신호 시간
+    timestamp: str            # 신호 Time
     description: str          # 신호 설명
 
 class AdvancedExitSystem:
-    """고급 청산 시스템"""
+    """고급 Exit 시스템"""
     
     def __init__(self, exchange=None, logger=None):
         self.exchange = exchange
         self.logger = logger or self._setup_logger()
         
-        # 설정
+        # Settings
         self.config = {
-            # 적응형 손절 설정
+            # 적응형 손절 Settings
             'adaptive_stop_loss': {
                 'low_volatility': {'initial': -0.12, 'first_dca': -0.09, 'second_dca': -0.06},    # 저변동성
                 'medium_volatility': {'initial': -0.10, 'first_dca': -0.07, 'second_dca': -0.05}, # 중변동성 (기본)
@@ -80,32 +80,32 @@ class AdvancedExitSystem:
                 'extreme_volatility': {'initial': -0.06, 'first_dca': -0.04, 'second_dca': -0.03} # 극고변동성
             },
             
-            # 다단계 익절 설정
+            # 다Stage 익절 Settings
             'multi_level_exits': [
-                ExitLevel(profit_threshold=0.05, exit_ratio=0.20, name="Level1_5%"),   # 5% → 20% 청산
-                ExitLevel(profit_threshold=0.10, exit_ratio=0.30, name="Level2_10%"),  # 10% → 30% 청산 (50% 유지)
-                ExitLevel(profit_threshold=0.20, exit_ratio=0.40, name="Level3_20%"),  # 20% → 40% 청산 (10% 유지)
+                ExitLevel(profit_threshold=0.05, exit_ratio=0.20, name="Level1_5%"),   # 5% → 20% Exit
+                ExitLevel(profit_threshold=0.10, exit_ratio=0.30, name="Level2_10%"),  # 10% → 30% Exit (50% Maintain)
+                ExitLevel(profit_threshold=0.20, exit_ratio=0.40, name="Level3_20%"),  # 20% → 40% Exit (10% Maintain)
                 ExitLevel(profit_threshold=0.30, exit_ratio=1.00, name="Level4_30%")   # 30% → 나머지 전량
             ],
             
-            # 트레일링 스톱 설정
+            # Trailing 스톱 Settings
             'trailing_stop': {
-                'activation_threshold': 0.05,  # 5% 수익시 활성화
+                'activation_threshold': 0.05,  # 5% 수익시 Active화
                 'trailing_levels': {
-                    '5_to_10': 0.03,    # 5-10% 구간: 3% 트레일링
-                    '10_to_20': 0.03,   # 10-20% 구간: 3% 트레일링  
-                    '20_plus': 0.05     # 20%+ 구간: 5% 트레일링
+                    '5_to_10': 0.03,    # 5-10% 구간: 3% Trailing
+                    '10_to_20': 0.03,   # 10-20% 구간: 3% Trailing  
+                    '20_plus': 0.05     # 20%+ 구간: 5% Trailing
                 }
             },
             
-            # 기술적 청산 설정
+            # 기술적 Exit Settings
             'technical_exit': {
-                'signal_threshold': 2,          # 최소 신호 개수
+                'signal_threshold': 2,          # 최소 신호 count수
                 'min_signal_strength': 0.6,    # 최소 신호 강도
-                'exit_ratio': 1.0              # 청산 비율 (전량)
+                'exit_ratio': 1.0              # Exit 비율 (전량)
             },
             
-            # ATR 설정
+            # ATR Settings
             'atr_period': 14,                   # ATR 계산 기간
             'volatility_thresholds': {
                 'low': 0.02,      # 2% 미만
@@ -114,7 +114,7 @@ class AdvancedExitSystem:
             }
         }
         
-        # 상태 관리
+        # Status 관리
         self.trailing_stops = {}        # {symbol: TrailingStopState}
         self.exit_levels = {}          # {symbol: List[ExitLevel]}
         self.last_volatility = {}      # {symbol: VolatilityLevel}
@@ -123,10 +123,10 @@ class AdvancedExitSystem:
         # 스레드 안전성
         self.lock = threading.Lock()
         
-        self.logger.info("고급 청산 시스템 초기화 완료")
+        self.logger.info("고급 Exit System Initialization complete")
     
     def _setup_logger(self):
-        """로거 설정"""
+        """로거 Settings"""
         logger = logging.getLogger('AdvancedExitSystem')
         logger.setLevel(logging.INFO)
         
@@ -146,7 +146,7 @@ class AdvancedExitSystem:
             if not self.exchange:
                 return 0.05, VolatilityLevel.MEDIUM  # 기본값
             
-            # OHLCV 데이터 조회
+            # OHLCV 데이터 조times
             ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=periods + 5)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
@@ -156,7 +156,7 @@ class AdvancedExitSystem:
             df['tr3'] = abs(df['low'] - df['close'].shift(1))
             df['tr'] = df[['tr1', 'tr2', 'tr3']].max(axis=1)
             
-            # ATR 비율 계산 (가격 대비)
+            # ATR 비율 계산 (가격 vs)
             atr = df['tr'].rolling(window=periods).mean().iloc[-1]
             current_price = df['close'].iloc[-1]
             atr_pct = atr / current_price
@@ -176,7 +176,7 @@ class AdvancedExitSystem:
             return atr_pct, volatility_level
             
         except Exception as e:
-            self.logger.error(f"ATR 변동성 계산 실패 {symbol}: {e}")
+            self.logger.error(f"ATR 변동성 계산 Failed {symbol}: {e}")
             return 0.05, VolatilityLevel.MEDIUM
     
     def get_adaptive_stop_loss(self, symbol: str, current_stage: str) -> float:
@@ -185,31 +185,31 @@ class AdvancedExitSystem:
             # 변동성 계산
             atr_pct, volatility_level = self.calculate_atr_volatility(symbol)
             
-            # 변동성별 손절 비율 조회
+            # 변동성별 손절 비율 조times
             volatility_key = f"{volatility_level.value}_volatility"
             stop_loss_config = self.config['adaptive_stop_loss'].get(
                 volatility_key, 
                 self.config['adaptive_stop_loss']['medium_volatility']
             )
             
-            # 단계별 손절 비율
+            # Stage별 손절 비율
             stop_loss_pct = stop_loss_config.get(current_stage, -0.10)
             
-            # 변동성 정보 저장
+            # 변동성 Info Save
             with self.lock:
                 self.last_volatility[symbol] = volatility_level
             
-            self.logger.info(f"🎯 {symbol} 적응형 손절: {stop_loss_pct*100:.1f}% ({volatility_level.value}, {current_stage})")
+            self.logger.info(f"🎯 {symbol} 적응형 Stop loss: {stop_loss_pct*100:.1f}% ({volatility_level.value}, {current_stage})")
             return stop_loss_pct
             
         except Exception as e:
-            self.logger.error(f"적응형 손절 계산 실패 {symbol}: {e}")
+            self.logger.error(f"적응형 Stop loss 계산 Failed {symbol}: {e}")
             return -0.10  # 기본값
     
     def initialize_exit_levels(self, symbol: str):
-        """청산 레벨 초기화"""
+        """Exit 레벨 Initialize"""
         with self.lock:
-            # 다단계 익절 레벨 복사
+            # 다Stage 익절 레벨 복사
             self.exit_levels[symbol] = [
                 ExitLevel(
                     profit_threshold=level.profit_threshold,
@@ -219,10 +219,10 @@ class AdvancedExitSystem:
                 ) for level in self.config['multi_level_exits']
             ]
         
-        self.logger.info(f"🎯 {symbol} 다단계 익절 레벨 초기화: {len(self.exit_levels[symbol])}개")
+        self.logger.info(f"🎯 {symbol} 다Stage Take profit 레벨 Initialize: {len(self.exit_levels[symbol])}count")
     
     def check_multi_level_exits(self, symbol: str, current_price: float, average_price: float) -> Optional[Dict[str, Any]]:
-        """다단계 익절 확인"""
+        """다Stage 익절 Confirm"""
         try:
             if symbol not in self.exit_levels:
                 self.initialize_exit_levels(symbol)
@@ -232,13 +232,13 @@ class AdvancedExitSystem:
             with self.lock:
                 levels = self.exit_levels[symbol]
                 
-                # 실행 가능한 레벨 찾기
+                # Execute 가능한 레벨 찾기
                 for level in levels:
                     if not level.is_executed and profit_pct >= level.profit_threshold:
-                        # 레벨 실행 마킹
+                        # 레벨 Execute 마킹
                         level.is_executed = True
                         
-                        self.logger.info(f"💰 {symbol} {level.name} 익절 트리거: {profit_pct*100:.2f}% → {level.exit_ratio*100:.0f}% 청산")
+                        self.logger.info(f"💰 {symbol} {level.name} Take profit trigger: {profit_pct*100:.2f}% → {level.exit_ratio*100:.0f}% Exit")
                         
                         return {
                             'signal_type': ExitSignalType.MULTI_LEVEL_PROFIT.value,
@@ -252,17 +252,17 @@ class AdvancedExitSystem:
             return None
             
         except Exception as e:
-            self.logger.error(f"다단계 익절 확인 실패 {symbol}: {e}")
+            self.logger.error(f"다Stage Take profit Confirmation failed {symbol}: {e}")
             return None
     
     def update_trailing_stop(self, symbol: str, current_price: float, average_price: float) -> Optional[Dict[str, Any]]:
-        """트레일링 스톱 업데이트 및 확인"""
+        """Trailing 스톱 Update 및 Confirm"""
         try:
             profit_pct = (current_price - average_price) / average_price
             activation_threshold = self.config['trailing_stop']['activation_threshold']
             
             with self.lock:
-                # 트레일링 스톱 상태 초기화
+                # Trailing 스톱 Status Initialize
                 if symbol not in self.trailing_stops:
                     self.trailing_stops[symbol] = TrailingStopState(
                         symbol=symbol,
@@ -274,20 +274,20 @@ class AdvancedExitSystem:
                 
                 trailing_state = self.trailing_stops[symbol]
                 
-                # 활성화 확인
+                # Active화 Confirm
                 if not trailing_state.is_active and profit_pct >= activation_threshold:
                     trailing_state.is_active = True
                     trailing_state.activation_price = current_price
                     trailing_state.highest_price = current_price
-                    self.logger.info(f"🔄 {symbol} 트레일링 스톱 활성화: {profit_pct*100:.2f}%")
+                    self.logger.info(f"🔄 {symbol} Trailing 스톱 Active화: {profit_pct*100:.2f}%")
                 
-                # 활성화된 경우 업데이트
+                # Active화된 경우 Update
                 if trailing_state.is_active:
-                    # 최고가 업데이트
+                    # Highest price Update
                     if current_price > trailing_state.highest_price:
                         trailing_state.highest_price = current_price
                         
-                        # 수익 구간별 트레일링 비율 설정
+                        # 수익 구간별 Trailing 비율 Settings
                         if profit_pct >= 0.20:
                             trailing_state.trailing_pct = self.config['trailing_stop']['trailing_levels']['20_plus']
                         elif profit_pct >= 0.10:
@@ -295,23 +295,23 @@ class AdvancedExitSystem:
                         else:
                             trailing_state.trailing_pct = self.config['trailing_stop']['trailing_levels']['5_to_10']
                     
-                    # 트레일링 가격 계산
+                    # Trailing 가격 계산
                     trailing_state.trailing_price = trailing_state.highest_price * (1 - trailing_state.trailing_pct)
                     trailing_state.last_update = datetime.now().isoformat()
                     
-                    # 트레일링 스톱 트리거 확인
+                    # Trailing stop trigger Confirm
                     if current_price <= trailing_state.trailing_price:
-                        self.logger.info(f"🛑 {symbol} 트레일링 스톱 트리거!")
-                        self.logger.info(f"   현재가: ${current_price:.6f}")
-                        self.logger.info(f"   트레일링가: ${trailing_state.trailing_price:.6f}")
-                        self.logger.info(f"   최고가: ${trailing_state.highest_price:.6f}")
+                        self.logger.info(f"🛑 {symbol} Trailing stop trigger!")
+                        self.logger.info(f"   Current price: ${current_price:.6f}")
+                        self.logger.info(f"   Trailing price: ${trailing_state.trailing_price:.6f}")
+                        self.logger.info(f"   Highest price: ${trailing_state.highest_price:.6f}")
                         
-                        # 트레일링 스톱 비활성화 (1회용)
+                        # Trailing 스톱 비Active화 (1times용)
                         trailing_state.is_active = False
                         
                         return {
                             'signal_type': ExitSignalType.TRAILING_STOP.value,
-                            'exit_ratio': 1.0,  # 전량 청산
+                            'exit_ratio': 1.0,  # 전량 Exit
                             'highest_price': trailing_state.highest_price,
                             'trailing_price': trailing_state.trailing_price,
                             'trailing_pct': trailing_state.trailing_pct * 100,
@@ -321,7 +321,7 @@ class AdvancedExitSystem:
             return None
             
         except Exception as e:
-            self.logger.error(f"트레일링 스톱 업데이트 실패 {symbol}: {e}")
+            self.logger.error(f"Trailing 스톱 Update Failed {symbol}: {e}")
             return None
     
     def calculate_technical_signals(self, symbol: str) -> List[TechnicalSignal]:
@@ -332,7 +332,7 @@ class AdvancedExitSystem:
             if not self.exchange:
                 return signals
             
-            # 5분봉 데이터 조회 (기술적 청산용)
+            # 5minute candles 데이터 조times (기술적 Exit용)
             ohlcv_5m = self.exchange.fetch_ohlcv(symbol, '5m', limit=100)
             df_5m = pd.DataFrame(ohlcv_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
@@ -341,7 +341,7 @@ class AdvancedExitSystem:
             if signal1:
                 signals.append(signal1)
             
-            # 2. 거래량 급감 (20봉 평균 대비 50% 이하)
+            # 2. Trade량 급감 (20봉 평균 vs 50% 이하)
             signal2 = self._check_volume_decline_signal(df_5m)
             if signal2:
                 signals.append(signal2)
@@ -356,19 +356,19 @@ class AdvancedExitSystem:
             if signal4:
                 signals.append(signal4)
             
-            # 5. SuperTrend(10-3) 청산 시그널 (수익률 >10% 조건 하에서)
+            # 5. SuperTrend(10-3) Exit 시그널 (Profit ratio >10% 조건 하에서)
             signal5 = self._check_supertrend_signal(df_5m)
             if signal5:
                 signals.append(signal5)
             
-            # 신호 저장
+            # 신호 Save
             with self.lock:
                 self.technical_signals[symbol] = signals
             
             return signals
             
         except Exception as e:
-            self.logger.error(f"기술적 신호 계산 실패 {symbol}: {e}")
+            self.logger.error(f"기술적 신호 계산 Failed {symbol}: {e}")
             return signals
     
     def _check_ma_bb_rsi_signal(self, df: pd.DataFrame) -> Optional[TechnicalSignal]:
@@ -377,7 +377,7 @@ class AdvancedExitSystem:
             # MA5 계산
             df['ma5'] = df['close'].rolling(window=5).mean()
             
-            # BB600 계산 (600봉이므로 대신 20봉 사용)
+            # BB600 계산 (600봉이므로 대신 20봉 Usage)
             bb_period = min(20, len(df) - 1)
             df['bb_middle'] = df['close'].rolling(window=bb_period).mean()
             df['bb_std'] = df['close'].rolling(window=bb_period).std()
@@ -390,12 +390,12 @@ class AdvancedExitSystem:
             rs = gain / loss
             df['rsi'] = 100 - (100 / (1 + rs))
             
-            # 현재 및 이전 값
+            # Current 및 이전 값
             current_ma5 = df['ma5'].iloc[-1]
             current_bb_upper = df['bb_upper'].iloc[-1]
             current_rsi = df['rsi'].iloc[-1]
             
-            # 데드크로스 확인 (5봉 내)
+            # 데드크로스 Confirm (5봉 내)
             ma5_cross_down = False
             for i in range(max(1, len(df) - 5), len(df)):
                 if (df['ma5'].iloc[i-1] > df['bb_upper'].iloc[i-1] and 
@@ -403,7 +403,7 @@ class AdvancedExitSystem:
                     ma5_cross_down = True
                     break
             
-            # 조건 확인
+            # 조건 Confirm
             if ma5_cross_down and current_rsi < 30:
                 strength = min(1.0, (30 - current_rsi) / 30 + 0.5)  # RSI가 낮을수록 강한 신호
                 
@@ -417,13 +417,13 @@ class AdvancedExitSystem:
             return None
             
         except Exception as e:
-            self.logger.error(f"MA-BB-RSI 신호 계산 실패: {e}")
+            self.logger.error(f"MA-BB-RSI 신호 계산 Failed: {e}")
             return None
     
     def _check_volume_decline_signal(self, df: pd.DataFrame) -> Optional[TechnicalSignal]:
-        """거래량 급감 신호"""
+        """Trade량 급감 신호"""
         try:
-            # 20봉 평균 거래량
+            # 20봉 평균 Trade량
             df['volume_avg'] = df['volume'].rolling(window=20).mean()
             
             current_volume = df['volume'].iloc[-1]
@@ -438,13 +438,13 @@ class AdvancedExitSystem:
                     signal_type="VOLUME_DECLINE",
                     strength=strength,
                     timestamp=datetime.now().isoformat(),
-                    description=f"거래량 급감 ({decline_ratio*100:.1f}% of 20MA)"
+                    description=f"Trade량 급감 ({decline_ratio*100:.1f}% of 20MA)"
                 )
             
             return None
             
         except Exception as e:
-            self.logger.error(f"거래량 급감 신호 계산 실패: {e}")
+            self.logger.error(f"Trade량 급감 신호 계산 Failed: {e}")
             return None
     
     def _check_consecutive_red_signal(self, df: pd.DataFrame) -> Optional[TechnicalSignal]:
@@ -453,11 +453,11 @@ class AdvancedExitSystem:
             # MA5 계산
             df['ma5'] = df['close'].rolling(window=5).mean()
             
-            # 3연속 음봉 확인
+            # 3연속 음봉 Confirm
             recent_3 = df.tail(3)
             is_3_red = all(row['close'] < row['open'] for _, row in recent_3.iterrows())
             
-            # MA5 하향 돌파 확인
+            # MA5 하향 돌파 Confirm
             current_close = df['close'].iloc[-1]
             current_ma5 = df['ma5'].iloc[-1]
             prev_close = df['close'].iloc[-2]
@@ -466,7 +466,7 @@ class AdvancedExitSystem:
             ma5_break_down = (prev_close >= prev_ma5 and current_close < current_ma5)
             
             if is_3_red and ma5_break_down:
-                # 음봉 크기 기반 강도 계산
+                # 음봉 Size 기반 강도 계산
                 red_ratios = [(row['open'] - row['close']) / row['open'] for _, row in recent_3.iterrows()]
                 avg_red_ratio = sum(red_ratios) / len(red_ratios)
                 strength = min(1.0, avg_red_ratio * 10 + 0.4)
@@ -475,13 +475,13 @@ class AdvancedExitSystem:
                     signal_type="CONSECUTIVE_RED_MA5",
                     strength=strength,
                     timestamp=datetime.now().isoformat(),
-                    description=f"3연속 음봉 + MA5 하향돌파 (평균하락률: {avg_red_ratio*100:.1f}%)"
+                    description=f"3연속 음봉 + MA5 하향돌파 (평균Drop rate: {avg_red_ratio*100:.1f}%)"
                 )
             
             return None
             
         except Exception as e:
-            self.logger.error(f"연속 음봉 신호 계산 실패: {e}")
+            self.logger.error(f"연속 음봉 신호 계산 Failed: {e}")
             return None
     
     def _check_bb_squeeze_signal(self, df: pd.DataFrame) -> Optional[TechnicalSignal]:
@@ -495,7 +495,7 @@ class AdvancedExitSystem:
             df['bb_lower'] = df['bb_middle'] - (df['bb_std'] * 2)
             df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
             
-            # 수축률 계산 (현재 vs 평균)
+            # 수축률 계산 (Current vs 평균)
             current_width = df['bb_width'].iloc[-1]
             avg_width = df['bb_width'].rolling(window=10).mean().iloc[-1]
             
@@ -513,11 +513,11 @@ class AdvancedExitSystem:
             return None
             
         except Exception as e:
-            self.logger.error(f"BB 수축 신호 계산 실패: {e}")
+            self.logger.error(f"BB 수축 신호 계산 Failed: {e}")
             return None
     
     def _check_supertrend_signal(self, df: pd.DataFrame) -> Optional[TechnicalSignal]:
-        """SuperTrend(10-3) 청산 신호 (수익률 >10% 조건 하에서만)"""
+        """SuperTrend(10-3) Exit 신호 (Profit ratio >10% 조건 하에서만)"""
         try:
             # SuperTrend 계산 (period=10, multiplier=3)
             period = 10
@@ -576,12 +576,12 @@ class AdvancedExitSystem:
                         df.loc[df.index[i], 'supertrend'] = df['final_upper'].iloc[i]
                         df.loc[df.index[i], 'supertrend_direction'] = -1
             
-            # 청산 시그널 감지: 상승 트렌드에서 하락 트렌드로 전환
+            # Exit 시그널 감지: 상승 트렌드에서 하락 트렌드로 전환
             if len(df) >= 2:
                 prev_direction = df['supertrend_direction'].iloc[-2]
                 current_direction = df['supertrend_direction'].iloc[-1]
                 
-                # 상승(1)에서 하락(-1)으로 전환시 청산 시그널
+                # 상승(1)에서 하락(-1)으로 전환시 Exit 시그널
                 if pd.notna(prev_direction) and pd.notna(current_direction):
                     if prev_direction == 1 and current_direction == -1:
                         # 신호 강도 계산 (ATR 기반)
@@ -596,34 +596,34 @@ class AdvancedExitSystem:
                             signal_type="SUPERTREND_EXIT",
                             strength=strength,
                             timestamp=datetime.now().isoformat(),
-                            description=f"SuperTrend(10-3) 청산 시그널 (상승→하락 전환, ATR: {atr_ratio*100:.2f}%)"
+                            description=f"SuperTrend(10-3) Exit 시그널 (상승→하락 전환, ATR: {atr_ratio*100:.2f}%)"
                         )
             
             return None
             
         except Exception as e:
-            self.logger.error(f"SuperTrend 신호 계산 실패: {e}")
+            self.logger.error(f"SuperTrend 신호 계산 Failed: {e}")
             return None
     
     def check_technical_exit(self, symbol: str, current_price: float = None, average_price: float = None) -> Optional[Dict[str, Any]]:
-        """복합 기술적 청산 확인"""
+        """복합 기술적 Exit Confirm"""
         try:
             # 기술적 신호 계산
             signals = self.calculate_technical_signals(symbol)
             
-            # SuperTrend 신호에 대한 수익률 조건 체크
+            # SuperTrend 신호에 대한 Profit ratio 조건 체크
             if current_price and average_price:
                 profit_pct = (current_price - average_price) / average_price
                 
-                # SuperTrend 신호가 있지만 수익률이 10% 미만인 경우 필터링
+                # SuperTrend 신호가 있지만 Profit ratio이 10% 미만인 경우 Filtering
                 filtered_signals = []
                 for signal in signals:
                     if signal.signal_type == "SUPERTREND_EXIT":
-                        if profit_pct >= 0.10:  # 수익률 >10% 조건
+                        if profit_pct >= 0.10:  # Profit ratio >10% 조건
                             filtered_signals.append(signal)
-                            self.logger.info(f"🎯 {symbol} SuperTrend 청산 시그널 적용 (수익률: {profit_pct*100:.2f}%)")
+                            self.logger.info(f"🎯 {symbol} SuperTrend Exit 시그널 적용 (Profit ratio: {profit_pct*100:.2f}%)")
                         else:
-                            self.logger.debug(f"⏸️ {symbol} SuperTrend 시그널 무시 (수익률 {profit_pct*100:.2f}% < 10%)")
+                            self.logger.debug(f"⏸️ {symbol} SuperTrend 시그널 무시 (Profit ratio {profit_pct*100:.2f}% < 10%)")
                     else:
                         filtered_signals.append(signal)
                 
@@ -632,7 +632,7 @@ class AdvancedExitSystem:
             if len(signals) < self.config['technical_exit']['signal_threshold']:
                 return None
             
-            # 강한 신호만 필터링
+            # 강한 신호만 Filtering
             strong_signals = [
                 s for s in signals 
                 if s.strength >= self.config['technical_exit']['min_signal_strength']
@@ -642,10 +642,10 @@ class AdvancedExitSystem:
                 avg_strength = sum(s.strength for s in strong_signals) / len(strong_signals)
                 signal_descriptions = [s.description for s in strong_signals]
                 
-                # SuperTrend 신호가 포함된 경우 특별 처리
+                # SuperTrend 신호가 포함된 경우 특별 Process
                 has_supertrend = any(s.signal_type == "SUPERTREND_EXIT" for s in strong_signals)
                 
-                self.logger.info(f"🔥 {symbol} 복합 기술적 청산 트리거!")
+                self.logger.info(f"🔥 {symbol} 복합 기술적 Exit 트리거!")
                 for desc in signal_descriptions:
                     self.logger.info(f"   • {desc}")
                 
@@ -661,14 +661,14 @@ class AdvancedExitSystem:
             return None
             
         except Exception as e:
-            self.logger.error(f"복합 기술적 청산 확인 실패 {symbol}: {e}")
+            self.logger.error(f"복합 기술적 Exit Confirmation failed {symbol}: {e}")
             return None
     
     def check_all_exit_conditions(self, symbol: str, current_price: float, average_price: float, 
                                  current_stage: str) -> Optional[Dict[str, Any]]:
-        """모든 청산 조건 종합 확인"""
+        """모든 Exit 조건 종합 Confirm"""
         try:
-            # 1. 적응형 손절 확인 (최우선)
+            # 1. 적응형 손절 Confirm (최우선)
             adaptive_stop_loss_pct = self.get_adaptive_stop_loss(symbol, current_stage)
             profit_pct = (current_price - average_price) / average_price
             
@@ -685,17 +685,17 @@ class AdvancedExitSystem:
                     'current_price': current_price
                 }
             
-            # 2. 복합 기술적 청산 확인 (손절 다음 우선순위)
+            # 2. 복합 기술적 Exit Confirm (손절 다음 우선순위)
             technical_exit = self.check_technical_exit(symbol, current_price, average_price)
             if technical_exit:
                 return technical_exit
             
-            # 3. 트레일링 스톱 확인
+            # 3. Trailing 스톱 Confirm
             trailing_exit = self.update_trailing_stop(symbol, current_price, average_price)
             if trailing_exit:
                 return trailing_exit
             
-            # 4. 다단계 익절 확인
+            # 4. 다Stage 익절 Confirm
             multi_level_exit = self.check_multi_level_exits(symbol, current_price, average_price)
             if multi_level_exit:
                 return multi_level_exit
@@ -703,32 +703,32 @@ class AdvancedExitSystem:
             return None
             
         except Exception as e:
-            self.logger.error(f"종합 청산 조건 확인 실패 {symbol}: {e}")
+            self.logger.error(f"종합 Exit 조 Confirmation failed {symbol}: {e}")
             return None
     
     def reset_exit_state(self, symbol: str):
-        """청산 상태 초기화"""
+        """Exit Status Initialize"""
         with self.lock:
-            # 트레일링 스톱 초기화
+            # Trailing 스톱 Initialize
             if symbol in self.trailing_stops:
                 del self.trailing_stops[symbol]
             
-            # 익절 레벨 초기화
+            # 익절 레벨 Initialize
             if symbol in self.exit_levels:
                 del self.exit_levels[symbol]
             
-            # 기술적 신호 초기화
+            # 기술적 신호 Initialize
             if symbol in self.technical_signals:
                 del self.technical_signals[symbol]
             
-            # 변동성 정보 초기화
+            # 변동성 Info Initialize
             if symbol in self.last_volatility:
                 del self.last_volatility[symbol]
         
-        self.logger.info(f"🔄 {symbol} 청산 상태 초기화 완료")
+        self.logger.info(f"🔄 {symbol} Exit Status Initialization complete")
     
     def get_exit_status(self, symbol: str) -> Dict[str, Any]:
-        """청산 시스템 상태 조회"""
+        """Exit 시스템 Status 조times"""
         with self.lock:
             return {
                 'trailing_stop': self.trailing_stops.get(symbol),

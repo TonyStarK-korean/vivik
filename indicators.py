@@ -16,7 +16,7 @@ import numpy as np
 from typing import Optional
 
 
-# 전략 조건 상세 설명 (format_condition_result에서 사용)
+# 전략 조건 상세 설명 (format_condition_result에서 Usage)
 STRATEGY_CONDITION_DETAILS = {
     # 전략 C 조건들
     'C1': {
@@ -26,7 +26,7 @@ STRATEGY_CONDITION_DETAILS = {
     },
     'C2A': {
         'name': '조건2A',
-        'description': 'MA5-MA20 데드크로스 확인',
+        'description': 'MA5-MA20 데드크로스 Confirm',
         'detail': '100봉이내 MA5-MA20 데드크로스 발생'
     },
     'C2B': {
@@ -41,25 +41,25 @@ STRATEGY_CONDITION_DETAILS = {
     },
     'C_ST': {
         'name': 'SuperTrend',
-        'description': '5분봉 SuperTrend 매수신호',
-        'detail': '5분봉 SuperTrend(10-3) 하락→상승 전환'
+        'description': '5minute candles SuperTrend 매수신호',
+        'detail': '5minute candles SuperTrend(10-3) 하락→상승 전환'
     },
 
     # 전략 D 조건들
     'D1': {
         'name': '조건D1',
-        'description': '15분봉 MA80<MA480',
-        'detail': '15분봉에서 MA80이 MA480 아래 위치'
+        'description': '15minute candles MA80<MA480',
+        'detail': '15minute candles에서 MA80이 MA480 아래 위치'
     },
     'D2': {
         'name': '조건D2',
-        'description': '5분봉 SuperTrend 매수신호',
-        'detail': '5분봉 SuperTrend(10-3) 하락→상승 전환'
+        'description': '5minute candles SuperTrend 매수신호',
+        'detail': '5minute candles SuperTrend(10-3) 하락→상승 전환'
     },
     'D3': {
         'name': '조건D3',
         'description': 'MA80-MA480 골든크로스 OR 이격도 5%이내',
-        'detail': '200봉이내 골든크로스 또는 현재 이격도 5%이내'
+        'detail': '200봉이내 골든크로스 또는 Current 이격도 5%이내'
     },
     'D4': {
         'name': '조건D4',
@@ -83,13 +83,13 @@ def calculate_indicators(df: pd.DataFrame, logger=None) -> Optional[pd.DataFrame
         logger: 로거 인스턴스 (선택)
 
     Returns:
-        지표가 추가된 데이터프레임 또는 None
+        지표가 Add된 데이터프레임 또는 None
     """
     try:
         if df is None:
             return None
 
-        # 완화된 데이터 요구사항 - WebSocket 실시간 데이터에 맞춰 조정
+        # 완화된 데이터 요구사항 - WebSocket 실Time 데이터에 맞춰 조정
         if len(df) >= 300:
             min_required = 100
         elif len(df) >= 200:
@@ -101,15 +101,15 @@ def calculate_indicators(df: pd.DataFrame, logger=None) -> Optional[pd.DataFrame
 
         if len(df) < min_required:
             if logger:
-                logger.debug(f"지표 계산 실패: 데이터 부족 (길이:{len(df)}, 필요:{min_required})")
-            # 극한 완화 - 최소 20개만 있어도 계산 시도
+                logger.debug(f"지표 계산 Failed: Insufficient data (Length:{len(df)}, Required:{min_required})")
+            # 극한 완화 - 최소 20count만 있어도 계산 Attempt
             if len(df) >= 20:
                 if logger:
-                    logger.warning(f"⚠️ 데이터 부족하지만 {len(df)}개로 지표 계산 시도")
+                    logger.warning(f"⚠️ Insufficient data하지만 {len(df)}count로 Indicator calculation attempt")
             else:
                 return None
 
-        # 이동평균 (길이에 따라 적응적 계산)
+        # 이동평균 (Length에 따라 적응적 계산)
         df['ma5'] = df['close'].rolling(window=5).mean()
         df['ma20'] = df['close'].rolling(window=min(20, len(df))).mean()
         df['ma80'] = df['close'].rolling(window=min(80, len(df))).mean()
@@ -118,7 +118,7 @@ def calculate_indicators(df: pd.DataFrame, logger=None) -> Optional[pd.DataFrame
         if len(df) >= 480:
             df['ma480'] = df['close'].rolling(window=480).mean()
         else:
-            # 데이터가 부족하면 MA200 또는 최대 가능한 길이로 대체
+            # 데이터가 부족하면 MA200 또는 최대 가능한 Length로 대체
             ma_window = min(200, len(df) // 2) if len(df) > 20 else len(df) // 2
             if ma_window > 0:
                 df['ma480'] = df['close'].rolling(window=ma_window).mean()
@@ -145,7 +145,7 @@ def calculate_indicators(df: pd.DataFrame, logger=None) -> Optional[pd.DataFrame
                 df[f'bb{period}_upper'] = rolling_mean + (rolling_std * 2)
                 df[f'bb{period}_lower'] = rolling_mean - (rolling_std * 2)
             else:
-                # 개선된 대체 계산: 가용 데이터로 최대한 계산
+                # count선된 대체 계산: 가용 데이터로 최대한 계산
                 max_window = min(len(df) - 5, max(20, len(df) // 2))
                 if max_window >= 20:
                     rolling_mean = df['close'].rolling(window=max_window).mean()
@@ -169,7 +169,7 @@ def calculate_indicators(df: pd.DataFrame, logger=None) -> Optional[pd.DataFrame
         df['ichimoku_base'] = (df['high'].rolling(window=26).max() + df['low'].rolling(window=26).min()) / 2
         df['ichimoku_conversion'] = (df['high'].rolling(window=9).max() + df['low'].rolling(window=9).min()) / 2
 
-        # SuperTrend 지표 추가
+        # SuperTrend 지표 Add
         if len(df) >= 20:
             try:
                 # ATR 계산
@@ -182,7 +182,7 @@ def calculate_indicators(df: pd.DataFrame, logger=None) -> Optional[pd.DataFrame
                 )
                 df['atr'] = df['tr'].rolling(window=10).mean()
 
-                # SuperTrend 계산 (10-3 설정)
+                # SuperTrend 계산 (10-3 Settings)
                 hl2 = (df['high'] + df['low']) / 2
                 multiplier = 3.0
                 df['upper_band'] = hl2 + (multiplier * df['atr'])
@@ -223,48 +223,48 @@ def calculate_indicators(df: pd.DataFrame, logger=None) -> Optional[pd.DataFrame
 
             except Exception as st_error:
                 if logger:
-                    logger.warning(f"SuperTrend 계산 실패: {st_error}")
-                # SuperTrend 실패시 기본값 설정
+                    logger.warning(f"SuperTrend 계산 Failed: {st_error}")
+                # SuperTrend Failed시 기본값 Settings
                 df['supertrend'] = df['close']
                 df['supertrend_direction'] = 1
                 df['supertrend_signal'] = 1
 
-        # 최소 데이터 검증 (더 관대한 기준)
+        # 최소 데이터 Verification (더 관대한 기준)
         recent_check = df.tail(10)
 
-        # 기본 지표 검증
+        # 기본 지표 Verification
         ma20_valid = recent_check['ma20'].notna().sum()
         ma80_valid = recent_check['ma80'].notna().sum()
 
         if ma20_valid < 3 or ma80_valid < 3:
             if logger:
-                logger.debug(f"지표 계산 실패: 기본 MA 데이터 부족 (MA20:{ma20_valid}/10, MA80:{ma80_valid}/10)")
+                logger.debug(f"지표 계산 Failed: 기본 MA Insufficient data (MA20:{ma20_valid}/10, MA80:{ma80_valid}/10)")
             return None
 
-        # MA480은 조건부 검증
+        # MA480은 조건부 Verification
         if len(df) >= 480:
             ma480_valid = recent_check['ma480'].notna().sum()
             if ma480_valid < 3:
                 if logger:
-                    logger.debug(f"지표 계산 실패: MA480 데이터 부족 (유효:{ma480_valid}/10)")
+                    logger.debug(f"지표 계산 Failed: MA480 Insufficient data (유효:{ma480_valid}/10)")
                 return None
 
-        # BB600 검증: 원래 계산 또는 대체 계산 모두 허용
+        # BB600 Verification: 원래 계산 또는 대체 계산 모두 허용
         if 'bb600_upper' in df.columns:
             bb600_valid = recent_check['bb600_upper'].notna().sum()
             if bb600_valid < 1:
                 if logger:
-                    logger.debug(f"지표 계산 실패: BB600 데이터 부족 (유효:{bb600_valid}/1)")
+                    logger.debug(f"지표 계산 Failed: BB600 Insufficient data (유효:{bb600_valid}/1)")
                 return None
-            # 대체 계산 사용 시 디버그 정보
+            # 대체 계산 Usage 시 Debug Info
             if len(df) < 600 and logger:
-                logger.debug(f"[INFO] BB600 대체계산 사용: 데이터{len(df)}개로 추정계산")
+                logger.debug(f"[INFO] BB600 대체계산 Usage: 데이터{len(df)}count로 추정계산")
 
         return df
 
     except Exception as e:
         if logger:
-            logger.error(f"지표 계산 실패: {e}")
+            logger.error(f"지표 계산 Failed: {e}")
         return None
 
 
@@ -279,7 +279,7 @@ def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float =
         logger: 로거 인스턴스 (선택)
 
     Returns:
-        SuperTrend 지표가 추가된 데이터프레임 또는 None
+        SuperTrend 지표가 Add된 데이터프레임 또는 None
     """
     try:
         if df is None or len(df) < period:
@@ -332,7 +332,7 @@ def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float =
 
     except Exception as e:
         if logger:
-            logger.error(f"SuperTrend 계산 실패: {e}")
+            logger.error(f"SuperTrend 계산 Failed: {e}")
         return None
 
 
@@ -342,8 +342,8 @@ def find_golden_cross(df: pd.DataFrame, ma1_col: str, ma2_col: str, recent_n: in
 
     Args:
         df: 데이터프레임
-        ma1_col: 빠른 이동평균 컬럼명
-        ma2_col: 느린 이동평균 컬럼명
+        ma1_col: 빠른 이동평균 Column명
+        ma2_col: 느린 이동평균 Column명
         recent_n: 최근 몇 봉을 검사할지
         logger: 로거 인스턴스 (선택)
 
@@ -369,7 +369,7 @@ def find_golden_cross(df: pd.DataFrame, ma1_col: str, ma2_col: str, recent_n: in
             curr_row = recent_df.iloc[curr_idx]
             next_row = recent_df.iloc[next_idx]
 
-            # 모든 값이 유효한지 확인
+            # 모든 값이 유효한지 Confirm
             if (pd.notna(curr_row[ma1_col]) and pd.notna(curr_row[ma2_col]) and
                 pd.notna(next_row[ma1_col]) and pd.notna(next_row[ma2_col])):
 
@@ -382,7 +382,7 @@ def find_golden_cross(df: pd.DataFrame, ma1_col: str, ma2_col: str, recent_n: in
 
     except Exception as e:
         if logger:
-            logger.error(f"골든크로스 탐지 오류: {e}")
+            logger.error(f"골든크로스 탐지 Error: {e}")
         return False
 
 
@@ -392,8 +392,8 @@ def find_dead_cross(df: pd.DataFrame, ma1_col: str, ma2_col: str, recent_n: int 
 
     Args:
         df: 데이터프레임
-        ma1_col: 빠른 이동평균 컬럼명
-        ma2_col: 느린 이동평균 컬럼명
+        ma1_col: 빠른 이동평균 Column명
+        ma2_col: 느린 이동평균 Column명
         recent_n: 최근 몇 봉을 검사할지
         logger: 로거 인스턴스 (선택)
 
@@ -419,7 +419,7 @@ def find_dead_cross(df: pd.DataFrame, ma1_col: str, ma2_col: str, recent_n: int 
             curr_row = recent_df.iloc[curr_idx]
             next_row = recent_df.iloc[next_idx]
 
-            # 모든 값이 유효한지 확인
+            # 모든 값이 유효한지 Confirm
             if (pd.notna(curr_row[ma1_col]) and pd.notna(curr_row[ma2_col]) and
                 pd.notna(next_row[ma1_col]) and pd.notna(next_row[ma2_col])):
 
@@ -432,7 +432,7 @@ def find_dead_cross(df: pd.DataFrame, ma1_col: str, ma2_col: str, recent_n: int 
 
     except Exception as e:
         if logger:
-            logger.error(f"데드크로스 탐지 오류: {e}")
+            logger.error(f"데드크로스 탐지 Error: {e}")
         return False
 
 
@@ -441,9 +441,9 @@ def format_condition_result(condition_code: str, result: bool, extra_info: str =
     조건 체크 결과를 상세하게 포맷팅
 
     Args:
-        condition_code: 조건 코드 (C1, C2A, D1 등)
+        condition_code: 조건 Code (C1, C2A, D1 등)
         result: 조건 충족 여부
-        extra_info: 추가 정보 (선택)
+        extra_info: Add Info (선택)
 
     Returns:
         포맷팅된 결과 문자열
