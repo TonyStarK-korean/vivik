@@ -66,7 +66,45 @@ sudo journalctl -u trading-bot -f
 
 ---
 
-### 방법 2: 자동 업데이트 스크립트 사용
+### 방법 2: 강제 업데이트 (로컬 변경사항 무시) 🔴
+
+⚠️ **주의**: 이 방법은 VPS의 **모든 로컬 변경사항을 삭제**하고 GitHub 최신 버전으로 강제 덮어씁니다!
+
+```bash
+# 1. VPS에 SSH 접속
+ssh your_username@your_vps_ip
+
+# 2. 프로젝트 디렉토리로 이동
+cd ~/vivik
+
+# 3. 최신 스크립트 가져오기 (첫 실행 시)
+git pull origin main
+
+# 4. 실행 권한 부여
+chmod +x force_update_vps.sh
+
+# 5. 강제 업데이트 실행
+./force_update_vps.sh
+```
+
+**강제 업데이트가 자동으로 수행하는 작업:**
+1. ✅ 백업 생성 (`~/vivik_backup_force_YYYYMMDD_HHMMSS`)
+2. ✅ 봇 자동 중지
+3. ✅ **로컬 변경사항 모두 삭제** (`git reset --hard origin/main`)
+4. ✅ GitHub 최신 버전으로 강제 덮어쓰기
+5. ✅ Config 파일 자동 복원 (binance_config.py, telegram_config.py)
+6. ✅ 봇 자동 재시작
+7. ✅ 상태 확인
+
+**강제 업데이트 사용 시기:**
+- 🔸 Git 충돌이 발생해서 일반 업데이트가 안 될 때
+- 🔸 로컬에서 실수로 파일을 수정했을 때
+- 🔸 VPS 코드를 완전히 깨끗한 상태로 되돌리고 싶을 때
+- 🔸 `git pull` 실패 메시지가 계속 나올 때
+
+---
+
+### 방법 3: 자동 업데이트 스크립트 사용
 
 VPS에서 다음 스크립트를 실행하세요:
 

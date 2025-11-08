@@ -79,6 +79,35 @@ nohup python one_minute_surge_entry_strategy.py > trading_bot.log 2>&1 &
 tail -f trading_bot.log
 ```
 
+## VPS 업데이트 방법
+
+### 자동 업데이트 (권장)
+
+```bash
+cd ~/vivik
+git pull origin main
+chmod +x update_and_restart.sh
+./update_and_restart.sh
+```
+
+### 강제 업데이트 (로컬 변경사항 무시)
+
+⚠️ **주의**: VPS의 모든 로컬 변경사항이 삭제되고 GitHub 최신 버전으로 덮어씁니다!
+
+```bash
+cd ~/vivik
+git pull origin main
+chmod +x force_update_vps.sh
+./force_update_vps.sh
+```
+
+**강제 업데이트는 다음 경우에 사용:**
+- Git 충돌로 일반 업데이트가 안 될 때
+- 로컬 변경사항을 버리고 GitHub 버전으로 되돌릴 때
+- 완전히 깨끗한 상태로 재설치하고 싶을 때
+
+상세한 내용은 [VPS_UPDATE_GUIDE.md](VPS_UPDATE_GUIDE.md) 참고
+
 ### 6. systemd로 자동 실행 (권장)
 
 ```bash
