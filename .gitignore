@@ -66,3 +66,6 @@ telegram_config.py
 *.pem
 *.env
 .env.*
+*.ko_backup*
+translate_logs*.py
+Gmail*.zip
