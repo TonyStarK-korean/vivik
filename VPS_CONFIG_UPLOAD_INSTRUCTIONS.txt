@@ -1,0 +1,64 @@
+==================================================================
+VPS Config File Upload Instructions (English Only)
+==================================================================
+
+STEP 1: Connect to VPS
+-----------------------
+ssh root@158.247.193.81
+
+
+STEP 2: Copy and Paste Script
+------------------------------
+Open the file: upload_configs_to_vps.sh
+Copy the ENTIRE contents
+Paste into VPS SSH terminal
+Press Enter
+
+
+STEP 3: When Prompted
+----------------------
+The script will ask: "Do you want to restart the trading bot? (y/n)"
+Type: y
+Press Enter
+
+
+STEP 4: Monitor Logs
+--------------------
+The script will automatically show bot logs
+Press Ctrl+C to exit log view
+
+
+WHAT THE SCRIPT DOES:
+---------------------
+✅ Creates binance_config.py with your API keys
+✅ Creates telegram_config.py with your bot token
+✅ Verifies both files import correctly in Python
+✅ Stops the old bot process
+✅ Starts the new bot process
+✅ Shows real-time logs
+
+
+IMPORTANT NOTES:
+----------------
+• All script messages are in ENGLISH (no Korean encoding issues)
+• Python file contents can have Korean comments (no issue)
+• Script is fully automated - just paste and confirm
+• Config files are created in ~/vivik/ directory
+
+
+MANUAL RESTART (if needed):
+---------------------------
+cd ~/vivik
+pkill -f one_minute_surge_entry_strategy.py
+nohup python3 one_minute_surge_entry_strategy.py > trading_bot.log 2>&1 &
+tail -f trading_bot.log
+
+
+VERIFY CONFIG FILES:
+--------------------
+cd ~/vivik
+ls -lh binance_config.py telegram_config.py
+python3 -c "from binance_config import BinanceConfig; print('OK')"
+
+
+==================================================================

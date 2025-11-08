@@ -36,10 +36,10 @@ class TelegramBot:
         self.message_log_dir.mkdir(parents=True, exist_ok=True)
         self.message_log_file = self.message_log_dir / f"messages_{datetime.now().strftime('%Y%m%d')}.jsonl"
 
-        print(f"[Telegram Bot] 초기화 완료")
-        print(f"  봇 토큰: {self.bot_token[:10]}...")
-        print(f"  채팅 ID: {self.chat_id}")
-        print(f"  메시지 로그: {self.message_log_file}")
+        print(f"[Telegram Bot] Initialization complete")
+        print(f"  Bot token: {self.bot_token[:10]}...")
+        print(f"  Chat ID: {self.chat_id}")
+        print(f"  Message log: {self.message_log_file}")
     
     def send_message(self, message: str, parse_mode: str = "HTML", event_type: str = None, symbol: str = None, metadata: dict = None) -> bool:
         """
@@ -98,7 +98,7 @@ class TelegramBot:
                 f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
 
         except Exception as e:
-            print(f"[Telegram] 메시지 로그 저장 실패: {e}")
+            print(f"[Telegram] Message log save failed: {e}")
     
     def send_entry_alert(self, symbol: str, entry_price: float, position_amount: float, 
                         leverage: int, total_value: float, conditions: List[str]) -> bool:
@@ -181,7 +181,7 @@ class TelegramBot:
             
             positions_str = "\n".join(position_lines)
         else:
-            positions_str = "  📭 포지션 없음"
+            positions_str = "  📭 No positions"
         
         # 총 손익 이모지
         pnl_emoji = "🟢" if total_pnl >= 0 else "🔴"
@@ -243,12 +243,12 @@ class TelegramBot:
             for symbol_info in strong_symbols[:5]:  # 최대 5개만 표시
                 symbol = symbol_info.get('symbol', 'N/A')
                 conditions = symbol_info.get('conditions', 0)
-                message += f"  🎯 {symbol}: {conditions}/6 조건\n"
+                message += f"  🎯 {symbol}: {conditions}/6 conditions\n"
             
             if len(strong_symbols) > 5:
-                message += f"  ... 외 {len(strong_symbols) - 5}개\n"
+                message += f"  ... and {len(strong_symbols) - 5} more\n"
         else:
-            message += "  📭 없음\n"
+            message += "  📭 None\n"
         
         message += f"""
 ⏰ <b>스캔 시간:</b> {current_time}
@@ -329,6 +329,6 @@ if __name__ == "__main__":
     # 테스트 실행
     bot = TelegramBot()
     if bot.test_connection():
-        print("✅ 텔레그램 봇 연결 성공!")
+        print("✅ Telegram bot connection successful!")
     else:
-        print("❌ 텔레그램 봇 연결 실패!")
+        print("❌ Telegram bot connection failed!")

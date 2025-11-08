@@ -119,7 +119,7 @@ class CacheManager:
 
         except Exception as e:
             if self.logger:
-                self.logger.error(f"마켓 캐시 조회 실패: {e}")
+                self.logger.error(f"Market cache retrieval failed: {e}")
             # 실패시 기존 캐시라도 반환 (만료되었더라도)
             if self._market_cache is not None:
                 return self._market_cache
@@ -235,10 +235,10 @@ class CacheManager:
             self._api_cache_time = 0
 
             if self.logger:
-                self.logger.info("✅ 모든 캐시 초기화 완료")
+                self.logger.info("✅ All caches cleared successfully")
         except Exception as e:
             if self.logger:
-                self.logger.error(f"❌ 캐시 초기화 실패: {e}")
+                self.logger.error(f"❌ Cache clear failed: {e}")
 
     def clear_expired_caches(self):
         """만료된 캐시만 정리"""
@@ -279,11 +279,11 @@ class CacheManager:
                 self._api_cache_time = 0
 
             if self.logger:
-                self.logger.debug(f"✅ 만료 캐시 정리 완료: {len(expired_keys) + len(expired_filter_keys)}개 항목")
+                self.logger.debug(f"✅ Expired cache cleanup complete: {len(expired_keys) + len(expired_filter_keys)} items")
 
         except Exception as e:
             if self.logger:
-                self.logger.error(f"❌ 만료 캐시 정리 실패: {e}")
+                self.logger.error(f"❌ Expired cache cleanup failed: {e}")
 
     def get_cache_stats(self) -> Dict[str, Any]:
         """캐시 통계 반환"""
@@ -312,15 +312,15 @@ if __name__ == "__main__":
     # 데이터 캐싱
     cache_mgr.set_cached_data("test_key", {"price": 50000})
     data = cache_mgr.get_cached_data("test_key")
-    print(f"캐시된 데이터: {data}")
+    print(f"Cached data: {data}")
 
     # 잔고 캐싱
     cache_mgr.cache_balance(10000.0)
     balance = cache_mgr.get_cached_balance()
-    print(f"캐시된 잔고: ${balance}")
+    print(f"Cached balance: ${balance}")
 
     # 캐시 통계
     stats = cache_mgr.get_cache_stats()
-    print(f"\n캐시 통계:")
+    print(f"\nCache statistics:")
     for key, value in stats.items():
         print(f"  {key}: {value}")

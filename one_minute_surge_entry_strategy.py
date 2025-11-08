@@ -280,7 +280,7 @@ class RateLimitTracker:
             with open(self.stats_file, 'w', encoding='utf-8') as f:
                 json.dump(stats_data, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            print(f"⚠️ Rate Limit 통계 저장 실패: {e}")
+            print(f"⚠️ Rate Limit stats save failed: {e}")
 
     def add_request(self, weight=1):
         """요청 가중치 추가"""
@@ -314,7 +314,7 @@ class RateLimitTracker:
         # 80% 도달시 경고 및 대기
         if self.weight_used >= self.max_weight * self.warning_threshold:
             remaining_weight = self.max_weight - self.weight_used
-            print(f"⚠️ Rate Limit {self.weight_used}/{self.max_weight} ({current_usage_pct:.1f}%) - 남은 가중치: {remaining_weight}")
+            print(f"⚠️ Rate Limit {self.weight_used}/{self.max_weight} ({current_usage_pct:.1f}%) - Remaining weight: {remaining_weight}")
 
             self.stats['warning_count'] += 1
             if current_hour in self.hourly_stats:
@@ -322,7 +322,7 @@ class RateLimitTracker:
 
             # 60% 이상이면 30초 대기 (IP 밴 절대 방지!)
             if self.weight_used >= self.max_weight * 0.6:
-                print(f"🛑 Rate Limit 60% 초과 - 30초 대기 (안전 최우선)")
+                print(f"🛑 Rate Limit 60% exceeded - Waiting 30s (safety first)")
                 self.stats['wait_count'] += 1
                 self.stats['total_wait_time'] += 30.0
                 time.sleep(30)
@@ -351,7 +351,7 @@ class RateLimitTracker:
         if not self.can_request(weight):
             wait_time = 60 - (time.time() - self.window_start)
             if wait_time > 0:
-                print(f"⏳ Rate Limit 대기: {wait_time:.1f}초")
+                print(f"⏳ Rate Limit waiting: {wait_time:.1f}s")
                 self.stats['wait_count'] += 1
                 self.stats['total_wait_time'] += wait_time
                 time.sleep(wait_time)
@@ -368,15 +368,15 @@ class RateLimitTracker:
                                   if self.stats['total_requests'] > 0 else 0)
 
         return {
-            '총 요청 수': self.stats['total_requests'],
-            '총 가중치': self.stats['total_weight_used'],
-            '평균 가중치/요청': f"{avg_weight_per_request:.2f}",
-            '경고 횟수': self.stats['warning_count'],
-            '대기 횟수': self.stats['wait_count'],
-            '총 대기 시간': f"{self.stats['total_wait_time']:.1f}초",
-            '피크 사용량': f"{self.stats['peak_weight']}/{self.max_weight} ({self.stats['peak_usage_pct']:.1f}%)",
-            '실행 시간': f"{runtime_hours:.2f}시간",
-            '시간당 요청': f"{self.stats['total_requests']/runtime_hours:.1f}회" if runtime_hours > 0 else "0회"
+            'Total Requests': self.stats['total_requests'],
+            'Total Weight': self.stats['total_weight_used'],
+            'Avg Weight/Request': f"{avg_weight_per_request:.2f}",
+            'Warning Count': self.stats['warning_count'],
+            'Wait Count': self.stats['wait_count'],
+            'Total Wait Time': f"{self.stats['total_wait_time']:.1f}s",
+            'Peak Usage': f"{self.stats['peak_weight']}/{self.max_weight} ({self.stats['peak_usage_pct']:.1f}%)",
+            'Runtime': f"{runtime_hours:.2f}h",
+            'Requests/Hour': f"{self.stats['total_requests']/runtime_hours:.1f}" if runtime_hours > 0 else "0"
         }
 
     def generate_daily_report(self):
@@ -386,33 +386,33 @@ class RateLimitTracker:
 
         report = f"""
 ╔════════════════════════════════════════════════════════════╗
-║          📊 Rate Limit 일일 리포트 - {today}          ║
+║          📊 Rate Limit Daily Report - {today}          ║
 ╚════════════════════════════════════════════════════════════╝
 
-📈 전체 통계:
-  • 총 요청 수: {summary['총 요청 수']:,}회
-  • 총 가중치 사용: {summary['총 가중치']:,}
-  • 평균 가중치/요청: {summary['평균 가중치/요청']}
-  • 시간당 평균 요청: {summary['시간당 요청']}
+📈 Overall Statistics:
+  • Total Requests: {summary['Total Requests']:,}
+  • Total Weight Used: {summary['Total Weight']:,}
+  • Avg Weight/Request: {summary['Avg Weight/Request']}
+  • Avg Requests/Hour: {summary['Requests/Hour']}
 
-⚠️ 경고 및 대기:
-  • Rate Limit 경고: {summary['경고 횟수']}회
-  • 대기 발생: {summary['대기 횟수']}회
-  • 총 대기 시간: {summary['총 대기 시간']}
+⚠️ Warnings & Waits:
+  • Rate Limit Warnings: {summary['Warning Count']}
+  • Wait Occurrences: {summary['Wait Count']}
+  • Total Wait Time: {summary['Total Wait Time']}
 
-🔥 피크 사용량:
-  • 최대 가중치: {summary['피크 사용량']}
+🔥 Peak Usage:
+  • Max Weight: {summary['Peak Usage']}
 
-⏱️ 실행 시간:
-  • 총 실행 시간: {summary['실행 시간']}
+⏱️ Runtime:
+  • Total Runtime: {summary['Runtime']}
 
-📊 시간대별 통계:
+📊 Hourly Statistics:
 """
         # 시간대별 통계 추가
         for hour, stats in sorted(self.hourly_stats.items()):
-            report += f"  • {hour}: {stats['requests']}회 요청, {stats['weight']} 가중치"
+            report += f"  • {hour}: {stats['requests']} requests, {stats['weight']} weight"
             if stats['warnings'] > 0:
-                report += f", ⚠️ {stats['warnings']}회 경고"
+                report += f", ⚠️ {stats['warnings']} warnings"
             report += "\n"
 
         report += "\n" + "═" * 60 + "\n"
@@ -560,7 +560,7 @@ class OneMinuteSurgeEntryStrategy:
                     self.exchange.session.mount('https://', adapter)
                     self.exchange.session.mount('http://', adapter)
                 except Exception as e:
-                    self.logger.warning(f"연결 풀 설정 실패 (무시 가능): {e}")
+                    self.logger.warning(f"Connection pool setup failed (ignorable): {e}")
 
                 # 마켓 로드 (API 밴 가능 지점)
                 self.exchange.load_markets()
@@ -569,12 +569,12 @@ class OneMinuteSurgeEntryStrategy:
                 usdt_symbols = [s for s in self.exchange.markets.keys() 
                               if s.endswith('/USDT') and self.exchange.markets[s]['active']]
                 
-                self.logger.info(f"바이낸스 연결 완료 - 전체 USDT 선물 심볼: {len(usdt_symbols)}개")
+                self.logger.info(f"Binance connection complete - Total USDT futures symbols: {len(usdt_symbols)}")
                 
                 if api_key and secret_key:
-                    self.logger.info("인증 API 사용 - 거래 가능")
+                    self.logger.info("Authenticated API - Trading enabled")
                 else:
-                    self.logger.info("공개 API 사용 - 스캔 전용")
+                    self.logger.info("Public API - Scan only mode")
                 
                 break  # 성공시 루프 종료
                     
@@ -586,7 +586,7 @@ class OneMinuteSurgeEntryStrategy:
                 if ("418" in error_str or "429" in error_str or "banned" in error_str.lower() or 
                     "Too many requests" in error_str):
                     
-                    self.logger.warning(f"🚨 API Rate Limit/IP 밴 감지 - WebSocket 전용 모드로 시작")
+                    self.logger.warning(f"🚨 API Rate Limit/IP ban detected - Starting in WebSocket-only mode")
                     
                     # 밴 해제 시간 표시
                     if "banned until" in error_str:
@@ -598,24 +598,24 @@ class OneMinuteSurgeEntryStrategy:
                                 ban_timestamp = ban_timestamp // 1000
                             import datetime
                             ban_time = datetime.datetime.fromtimestamp(ban_timestamp)
-                            print(f"🚨 IP 밴 해제 예정: {ban_time}")
+                            print(f"🚨 IP ban expected to lift: {ban_time}")
                     
                     # Rate limit 상태로 설정하고 WebSocket 전용 모드로 계속 진행
                     self._api_rate_limited = True
-                    print("🔄 WebSocket 전용 모드로 계속 진행합니다 (REST API 차단)")
+                    print("🔄 Continuing in WebSocket-only mode (REST API blocked)")
                     
                     # 최소한의 거래소 설정만 유지
                     try:
                         self.exchange = ccxt.binance(config)
                         # 심볼 목록만 하드코딩으로 설정
-                        self.logger.info("⚠️ WebSocket 전용 모드 - 제한된 기능으로 시작")
+                        self.logger.info("⚠️ WebSocket-only mode - Starting with limited features")
                         break  # WebSocket 모드로 계속 진행
                     except:
                         pass
                 else:
-                    self.logger.error(f"거래소 초기화 실패: {e}")
+                    self.logger.error(f"Exchange initialization failed: {e}")
                     if retry_count >= max_retries:
-                        raise Exception("거래소 연결 실패")
+                        raise Exception("Exchange connection failed")
         
         # 텔레그램 봇 설정
         self.telegram_bot = None
@@ -623,7 +623,7 @@ class OneMinuteSurgeEntryStrategy:
             try:
                 self.telegram_bot = TelegramBot(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
             except Exception as e:
-                self.logger.error(f"텔레그램 봇 초기화 실패: {e}")
+                self.logger.error(f"Telegram bot initialization failed: {e}")
         
         # 전략 설정 (옵션A: 보수적 안정 운영)
         self.max_positions = 15  # 최대 15종목 (확장된 포지션 관리)
@@ -686,27 +686,27 @@ class OneMinuteSurgeEntryStrategy:
                     stats_callback=self.update_trade_stats,
                     strategy=self  # 전략 참조 전달 (active_positions 즉시 동기화용)
                 )
-                self.logger.info("🚀 개선된 DCA 시스템 초기화 완료")
+                self.logger.info("🚀 Improved DCA system initialized successfully")
 
                 # 기존 포지션 처리 (개선된 시스템은 자동 동기화)
                 try:
                     active_positions = self.dca_manager.get_active_positions()
                     if active_positions:
-                        self.logger.info(f"🔄 {len(active_positions)}개 기존 포지션 감지 및 연동 완료")
+                        self.logger.info(f"🔄 Detected and synced {len(active_positions)} existing positions")
                 except Exception as e:
-                    self.logger.error(f"기존 포지션 동기화 실패: {e}")
+                    self.logger.error(f"Existing position sync failed: {e}")
             except Exception as e:
-                self.logger.error(f"개선된 DCA 시스템 초기화 실패: {e}")
+                self.logger.error(f"Improved DCA system initialization failed: {e}")
                 self.dca_manager = None
         else:
             # DCA 시스템 비활성화 상황들 처리 (조용히 처리)
             if not HAS_DCA_SYSTEM:
-                self.logger.warning("⚠️ DCA 시스템 비활성화 - improved_dca_position_manager.py 필요")
+                self.logger.warning("⚠️ DCA system disabled - improved_dca_position_manager.py required")
             elif not (api_key and secret_key):
                 # 공개 API 모드는 정상 작동이므로 warning 대신 info로 처리
-                self.logger.info("ℹ️ DCA 시스템 비활성화 - 스캔 전용 모드")
+                self.logger.info("ℹ️ DCA system disabled - Scan only mode")
             elif sandbox:
-                self.logger.warning("⚠️ DCA 시스템 비활성화 - 샌드박스 모드")
+                self.logger.warning("⚠️ DCA system disabled - Sandbox mode")
             self.dca_manager = None
         
         # 🛡️ DCA 복구 시스템 초기화 (통합)
@@ -718,13 +718,13 @@ class OneMinuteSurgeEntryStrategy:
                     dca_manager=self.dca_manager,
                     telegram_bot=self.telegram_bot
                 )
-                self.logger.info("🛡️ DCA 복구 시스템 초기화 완료")
+                self.logger.info("🛡️ DCA recovery system initialized successfully")
             except Exception as e:
-                self.logger.error(f"DCA 복구 시스템 초기화 실패: {e}")
+                self.logger.error(f"DCA recovery system initialization failed: {e}")
                 self.dca_recovery = None
         
         # 🔄 하이브리드 동기화 시스템 초기화 완료
-        self.logger.info(f"🔄 하이브리드 동기화 시스템 활성화 - 동기화 간격: {self.exchange_sync_interval}초, 정확도 임계값: {self.sync_accuracy_threshold}%")
+        self.logger.info(f"🔄 Hybrid sync system activated - Sync interval: {self.exchange_sync_interval}s, Accuracy threshold: {self.sync_accuracy_threshold}%")
         
         # 🚨 긴급 청산 요청 시스템 (API 밴 대응)
         self._emergency_exit_requests = set()
