@@ -28,14 +28,42 @@ class BinanceUserDataStream:
     """바이낸스 WebSocket User Data Stream 매니저"""
 
     def __init__(self, exchange, logger=None):
-        """Args: exchange: ccxt binance exchange 객체 logger: 로거 인스턴스"""
+        """
+        Args:
+            exchange: ccxt binance exchange 객체
+            logger: 로거 인스턴스
+        """
         self.exchange = exchange
         self.logger = logger or logging.getLogger(__name__)
 
         # API 키 설정
         self.api_key = exchange.apiKey
         self.api_secret = exchange.secret
-        self.base_url = 'https://fapi.binance.com'# Futures API # Listen Key 관리 self.listen_key: Optional[str] = None self.listen_key_created_at = 0 self.listen_key_refresh_interval = 30 * 60 # 30min마다 갱신 (60min 만료) # WebSocket 연결 self.ws = None self.ws_thread: Optional[threading.Thread] = None self.running = False # 실hour data 저장 self.positions: Dict[str, Dict] = {} # symbol -> position data self.balance: Dict = {} self.orders: Dict[str, Dict] = {} # orderId -> order data # 콜백 함수 self.position_callback: Optional[Callable] = None self.balance_callback: Optional[Callable] = None self.order_callback: Optional[Callable] = None # 통계 self.stats = {'position_updates': 0,
+        self.base_url = 'https://fapi.binance.com'  # Futures API
+
+        # Listen Key 관리
+        self.listen_key: Optional[str] = None
+        self.listen_key_created_at = 0
+        self.listen_key_refresh_interval = 30 * 60  # 30분마다 갱신 (60분 만료)
+
+        # WebSocket 연결
+        self.ws = None
+        self.ws_thread: Optional[threading.Thread] = None
+        self.running = False
+
+        # 실시간 데이터 저장
+        self.positions: Dict[str, Dict] = {}  # symbol -> position data
+        self.balance: Dict = {}
+        self.orders: Dict[str, Dict] = {}  # orderId -> order data
+
+        # 콜백 함수
+        self.position_callback: Optional[Callable] = None
+        self.balance_callback: Optional[Callable] = None
+        self.order_callback: Optional[Callable] = None
+
+        # 통계
+        self.stats = {
+            'position_updates': 0,
             'balance_updates': 0,
             'order_updates': 0,
             'reconnections': 0
@@ -44,7 +72,7 @@ class BinanceUserDataStream:
         self.logger.info("[INIT] WebSocket User Data Stream initialized")
 
     def _create_listen_key(self) -> Optional[str]:
-        """Listen Key 생성 (60min 유효)"""
+        """Listen Key 생성 (60분 유효)"""
         try:
             url = f"{self.base_url}/fapi/v1/listenKey"
             headers = {'X-MBX-APIKEY': self.api_key}
@@ -63,7 +91,7 @@ class BinanceUserDataStream:
             return None
 
     def _refresh_listen_key(self):
-        """Listen Key 갱신 (30min마다 자동 실행)"""
+        """Listen Key 갱신 (30분마다 자동 실행)"""
         try:
             if not self.listen_key:
                 return
@@ -81,15 +109,22 @@ class BinanceUserDataStream:
             self.logger.error(f"[ERROR] Listen Key refresh failed: {e}")
 
     def _handle_account_update(self, data: Dict):
-        """ACCOUNT_UPDATE 이벤트 처리 (position/잔고 변경)"""
+        """ACCOUNT_UPDATE 이벤트 처리 (포지션/잔고 변경)"""
         try:
             event_time = data.get('E', 0)
-            update_data = data.get('a', {}) # 1️⃣ position 업데이트 positions = update_data.get('P', [])
+            update_data = data.get('a', {})
+
+            # 1️⃣ 포지션 업데이트
+            positions = update_data.get('P', [])
             for pos in positions:
                 symbol = pos.get('s')  # BTCUSDT
                 position_amount = float(pos.get('pa', 0))  # Position Amount
                 entry_price = float(pos.get('ep', 0))  # Entry Price
-                unrealized_pnl = float(pos.get('up', 0)) # Unrealized PnL # position data 업데이트 self.positions[symbol] = {'symbol': symbol,
+                unrealized_pnl = float(pos.get('up', 0))  # Unrealized PnL
+
+                # 포지션 데이터 업데이트
+                self.positions[symbol] = {
+                    'symbol': symbol,
                     'contracts': abs(position_amount),
                     'side': 'long' if position_amount > 0 else 'short' if position_amount < 0 else 'none',
                     'entryPrice': entry_price,
@@ -131,7 +166,7 @@ class BinanceUserDataStream:
             self.logger.error(f"[ERROR] ACCOUNT_UPDATE processing failed: {e}")
 
     def _handle_order_update(self, data: Dict):
-        """ORDER_TRADE_UPDATE 이벤트 처리 (주문 filled/취소)"""
+        """ORDER_TRADE_UPDATE 이벤트 처리 (주문 체결/취소)"""
         try:
             event_time = data.get('E', 0)
             order_data = data.get('o', {})
@@ -144,7 +179,11 @@ class BinanceUserDataStream:
             price = float(order_data.get('p', 0))
             quantity = float(order_data.get('q', 0))
             filled_quantity = float(order_data.get('z', 0))
-            avg_price = float(order_data.get('ap', 0)) # Average Price # 주문 data 저장 self.orders[str(order_id)] = {'orderId': order_id,
+            avg_price = float(order_data.get('ap', 0))  # Average Price
+
+            # 주문 데이터 저장
+            self.orders[str(order_id)] = {
+                'orderId': order_id,
                 'symbol': symbol,
                 'status': status,
                 'side': side,
@@ -295,7 +334,12 @@ if __name__ == "__main__":
     # 로깅 설정
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s') # Exchange initialize exchange = ccxt.binance({'apiKey': API_KEY,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+
+    # Exchange 초기화
+    exchange = ccxt.binance({
+        'apiKey': API_KEY,
         'secret': API_SECRET,
         'options': {'defaultType': 'future'}
     })
@@ -305,7 +349,7 @@ if __name__ == "__main__":
 
     # 콜백 함수 등록
     def on_position_update(symbol, position):
-        print(f"[Position 변경] {symbol}: {position}")
+        print(f"[포지션 변경] {symbol}: {position}")
 
     def on_balance_update(asset, balance):
         print(f"[잔고 변경] {asset}: {balance}")
@@ -315,15 +359,15 @@ if __name__ == "__main__":
 
     # 시작
     if user_stream.start():
-        print("✅ User Data Stream 실행 in progress...")
-        print("end하려면 Ctrl+C를 누르세요")
+        print("✅ User Data Stream 실행 중...")
+        print("종료하려면 Ctrl+C를 누르세요")
 
         try:
             while True:
                 time.sleep(10)
                 stats = user_stream.get_stats()
-                print(f"\n📊 stats: {stats}")
+                print(f"\n📊 통계: {stats}")
 
         except KeyboardInterrupt:
-            print("\nend in progress...")
+            print("\n종료 중...")
             user_stream.stop()
