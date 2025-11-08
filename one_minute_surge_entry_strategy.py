@@ -9595,14 +9595,14 @@ class OneMinuteSurgeEntryStrategy:
             # 웹소켓 데이터가 부족할 때 REST API Usage (폴백)
             print("⚠️ Insufficient WebSocket data - REST API fallback")
             
-            # 1Stage: 티커 데이터 수집
+            # 1Stage: 티커 데이터 수집 (필터링 전 기본 데이터만)
             candidate_symbols = []
-            
+
             try:
-                print("⚡ 전체 티커 일괄 조times 중...")
+                print("⚡ 전체 티커 일괄 조회 중...")
                 all_tickers = self.exchange.fetch_tickers()
 
-                # 1Stage: 24Time 변동률로 빠른 사전 Filtering (상위 300count)
+                # 기본 심볼 리스트 생성 (24h 변동률 포함)
                 temp_candidates = []
                 for symbol in usdt_symbols:
                     if symbol in all_tickers:
@@ -9612,12 +9612,43 @@ class OneMinuteSurgeEntryStrategy:
                             volume_24h = ticker.get('quoteVolume', 0) or 0
                             temp_candidates.append((symbol, change_24h, volume_24h, ticker))
 
-                # 24Time 변동률 기준으로 정렬하되 전체 Symbol Usage
+                # 24h 변동률로 정렬
                 temp_candidates.sort(key=lambda x: x[1], reverse=True)
-                top_symbols = temp_candidates  # 전체 Symbol Usage (Approx 581count)
-                print(f"📊 1Stage 사전 Filtering: 전체 {len(top_symbols)}count Symbol Usage")
+                print(f"📊 전체 USDT 심볼 수집: {len(temp_candidates)}개")
 
-                # 2Stage: 전체 Symbol에 대해 오늘 09:00 이후 변동률 계산
+                # ============================================================
+                # 2Stage: 1일봉 필터링 (High vs Open 50% 이하만 통과)
+                # ============================================================
+                print(f"\n🔍 2Stage: 1일봉 필터링 시작 ({len(temp_candidates)}개 심볼)")
+                filtered_1d = self._apply_1d_filtering(temp_candidates)
+
+                if not filtered_1d or len(filtered_1d) == 0:
+                    print("⚠️ 1일봉 필터링 통과 종목 없음 - 스캔 중단")
+                    return []
+
+                print(f"✅ 1일봉 필터링 완료: {len(filtered_1d)}개 통과")
+
+                # ============================================================
+                # 3Stage: 4h 필터링 (4봉 이내 4% 이상 급등)
+                # ============================================================
+                print(f"\n🔍 3Stage: 4h 필터링 시작 ({len(filtered_1d)}개 심볼)")
+                filtered_4h = self._apply_4h_filtering(filtered_1d)
+
+                # 4h 필터링 결과가 없으면 폴백
+                if not filtered_4h or len(filtered_4h) == 0:
+                    print("⚠️ 4h 필터링 통과 종목 없음 → 통합 필터링으로 폴백")
+                    filtered_4h = self._apply_integrated_filtering(filtered_1d)
+
+                    if not filtered_4h or len(filtered_4h) == 0:
+                        print("⚠️ 통합 필터링도 통과 종목 없음 - 스캔 중단")
+                        return []
+
+                print(f"✅ 4h 필터링 완료: {len(filtered_4h)}개 통과")
+
+                # ============================================================
+                # 4Stage: 09:00 KST 이후 변동률 계산 및 >0% 필터링
+                # ============================================================
+                print(f"\n🔍 4Stage: 09:00 KST 변동률 필터링 시작 ({len(filtered_4h)}개 심볼)")
                 from datetime import datetime, time as dt_time, timedelta, timezone
 
                 # UTC Current 시각
@@ -9639,10 +9670,10 @@ class OneMinuteSurgeEntryStrategy:
                 since_timestamp = int(today_9am_utc.timestamp() * 1000)
 
                 print(f"📅 변동률 기준 시각: {today_9am_kst.strftime('%Y-%m-%d %H:%M:%S KST')} (UTC: {today_9am_utc.strftime('%Y-%m-%d %H:%M:%S')})")
-                print(f"🕐 Current KST: {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"🕐 현재 KST: {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
 
-                # 🚀 OPTIMIZATION: Parallel processing for 09:00 변동률 calculation
-                print(f"⚡ Parallel processing 09:00 change calculation for {len(top_symbols)} symbols...")
+                # 🚀 병렬 처리로 09:00 이후 변동률 계산
+                print(f"⚡ 병렬 처리: 09:00 이후 변동률 계산 중 ({len(filtered_4h)}개 심볼)...")
 
                 def calculate_9am_change(symbol_data):
                     """Calculate change since 09:00 for a single symbol (optimized)"""
@@ -9699,9 +9730,10 @@ class OneMinuteSurgeEntryStrategy:
                 from concurrent.futures import ThreadPoolExecutor, as_completed
                 max_workers = 20  # Safe parallelization to avoid IP ban
 
-                # Add index to top_symbols for debugging
-                indexed_symbols = [(idx, s, c, v, t) for idx, (s, c, v, t) in enumerate(top_symbols)]
+                # filtered_4h에 대해 09:00 변동률 계산
+                indexed_symbols = [(idx, s, c, v, t) for idx, (s, c, v, t) in enumerate(filtered_4h)]
 
+                kst_filtered_symbols = []
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = {executor.submit(calculate_9am_change, sym_data): sym_data[1]
                               for sym_data in indexed_symbols}
@@ -9710,30 +9742,33 @@ class OneMinuteSurgeEntryStrategy:
                     for future in as_completed(futures):
                         try:
                             result = future.result(timeout=5)
-                            candidate_symbols.append(result)
+                            kst_filtered_symbols.append(result)
                             completed += 1
 
-                            # Progress every 100 symbols
-                            if completed % 100 == 0:
-                                print(f"   ⚡ Processing: {completed}/{len(top_symbols)}", end='\r')
+                            # Progress every 20 symbols
+                            if completed % 20 == 0:
+                                print(f"   ⚡ 진행: {completed}/{len(filtered_4h)}", end='\r')
 
                         except Exception as e:
                             symbol = futures[future]
                             print(f"   ⚠️ [{symbol}] Processing failed: {e}")
 
-                print(f"\n   ✅ Parallel processing complete: {len(candidate_symbols)} symbols")
+                print(f"\n   ✅ 병렬 처리 완료: {len(kst_filtered_symbols)}개 심볼")
 
                 # 📊 09:00 이후 변동률 통계
-                positive_count = sum(1 for _, change, _, _ in candidate_symbols if change > 0)
-                negative_count = sum(1 for _, change, _, _ in candidate_symbols if change <= 0)
+                positive_count = sum(1 for _, change, _, _ in kst_filtered_symbols if change > 0)
+                negative_count = sum(1 for _, change, _, _ in kst_filtered_symbols if change <= 0)
 
-                print(f"✅ 2Stage Complete: 09:00 이후 변동률 계산 Complete ({len(candidate_symbols)}count)")
-                print(f"   📈 09:00 이후 > 0%: {positive_count}count ({positive_count/len(candidate_symbols)*100:.1f}%)")
-                print(f"   📉 09:00 이후 ≤ 0%: {negative_count}count ({negative_count/len(candidate_symbols)*100:.1f}%)")
+                print(f"   📈 09:00 이후 > 0%: {positive_count}개 ({positive_count/max(len(kst_filtered_symbols),1)*100:.1f}%)")
+                print(f"   📉 09:00 이후 ≤ 0%: {negative_count}개 ({negative_count/max(len(kst_filtered_symbols),1)*100:.1f}%)")
 
-                # 🚫 임시 비Active화: 09:00 이후 > 0% Filtering (New 종목 Entry 허용)
-                # candidate_symbols = [(s, c, v, t) for s, c, v, t in candidate_symbols if c > 0]
-                print(f"   ⚠️ 09:00 이후 > 0% Filtering 비Active화 - 전체 {len(candidate_symbols)}count 종목 허용")
+                # ✅ 09:00 이후 > 0% 필터링 활성화
+                candidate_symbols = [(s, c, v, t) for s, c, v, t in kst_filtered_symbols if c > 0]
+                print(f"✅ 4Stage 완료: 09:00 KST 이후 > 0% 필터링 → {len(candidate_symbols)}개 통과")
+
+                if not candidate_symbols or len(candidate_symbols) == 0:
+                    print("⚠️ 09:00 KST 이후 상승 종목 없음 - 스캔 중단")
+                    return []
 
             except Exception as e:
                 # Rate Limit 감지 및 Process 강화
@@ -9781,26 +9816,14 @@ class OneMinuteSurgeEntryStrategy:
                             self.logger.warning(f"Batch {i//batch_size + 1} Failed: {e}")
                             continue
 
-            print(f"🔍 전체 USDT Symbol 수집: {len(candidate_symbols)}count")
-
-            # 2Stage: 4Time봉 급등 Filtering (4봉 이내 4% 이상)
-            filtered_symbols = self._apply_4h_filtering(candidate_symbols)
-
-            # 4h Filtering 결과가 없으면 폴백으로 통합 Filtering Usage
-            if not filtered_symbols or len(filtered_symbols) == 0:
-                print("⚠️ 4h Filtering No results → 통합 Filtering으로 폴백")
-                filtered_symbols = self._apply_integrated_filtering(candidate_symbols)
-
-            # 3Stage: 1일봉 필터링 (High vs Open 50% 이하만 통과)
-            if filtered_symbols and len(filtered_symbols) > 0:
-                filtered_symbols = self._apply_1d_filtering(filtered_symbols)
-
-                if not filtered_symbols or len(filtered_symbols) == 0:
-                    print("⚠️ 1d Filtering 통과 종목 없음")
-                    return []
+            # ============================================================
+            # 최종 결과 정리
+            # ============================================================
+            print(f"\n📊 최종 필터링 결과: {len(candidate_symbols)}개 심볼")
 
             # 변동률 순으로 정렬
-            filtered_symbols.sort(key=lambda x: x[1], reverse=True)
+            candidate_symbols.sort(key=lambda x: x[1], reverse=True)
+            filtered_symbols = candidate_symbols
             
             if filtered_symbols:
                 # 상위 Symbol 출력 - 다양한 데이터 구조 대응
