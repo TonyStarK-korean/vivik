@@ -1,0 +1,32 @@
+{
+  "date": "2025-11-06",
+  "stats": {
+    "total_requests": 2300,
+    "total_weight_used": 11500,
+    "warning_count": 150,
+    "wait_count": 6,
+    "total_wait_time": 60.0,
+    "peak_weight": 1080,
+    "peak_usage_pct": 90.0,
+    "start_time": 1762424950.6316442,
+    "last_reset_time": 1762435827.250162
+  },
+  "hourly_stats": {
+    "2025-11-06 10:00": {
+      "requests": 500,
+      "weight": 2500,
+      "warnings": 50
+    },
+    "2025-11-06 12:00": {
+      "requests": 911,
+      "weight": 4555,
+      "warnings": 75
+    },
+    "2025-11-06 13:00": {
+      "requests": 889,
+      "weight": 4445,
+      "warnings": 25
+    }
+  },
+  "last_updated": "2025-11-06T13:32:28.340579+00:00"
+}

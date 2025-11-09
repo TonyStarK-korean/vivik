@@ -21,9 +21,13 @@ class TelegramBot:
             bot_token: 텔레그램 봇 토큰 (BotFather에서 생성)
             chat_id: 메시지를 받을 채팅방 ID
         """
-        # 기본값 설정 (실제 사용 시 환경변수나 설정 파일에서 읽어올 것)
+        # 실제 설정 값 사용, 플레이스홀더 값 검증
         self.bot_token = bot_token or "YOUR_BOT_TOKEN_HERE"
         self.chat_id = chat_id or "YOUR_CHAT_ID_HERE"
+        
+        # 플레이스홀더 값 검증
+        if self.bot_token == "YOUR_BOT_TOKEN_HERE" or self.chat_id == "YOUR_CHAT_ID_HERE":
+            print("[WARN] 텔레그램 설정이 플레이스홀더 값입니다. telegram_config.py 설정을 확인하세요.")
 
         # 텔레그램 API URL
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}"

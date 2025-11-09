@@ -1,0 +1,21 @@
+{
+  "enabled": true,
+  "description": "절반하락청산 설정 (10% 즉시청산 포함)",
+  "rules": {
+    "immediate_exit_at_10pct": true,
+    "half_profit_ratio": 0.5,
+    "quarter_profit_cutoff": 0.25
+  },
+  "thresholds": {
+    "immediate_exit_threshold": 0.10,
+    "min_profit_for_half_exit": 0.05,
+    "max_profit_for_half_exit": 0.10,
+    "weak_profit_min": 0.03,
+    "weak_profit_max": 0.05
+  },
+  "notes": [
+    "10% 수익률 달성 시 즉시 절반청산 (최우선 규칙)",
+    "5% 이상 수익 달성 후 절반(50%) 하락시 청산",
+    "25% 이하로 하락하면 청산 기회 상실로 처리"
+  ]
+}

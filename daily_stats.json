@@ -1,0 +1,20 @@
+{
+    "date": "2025-10-28",
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "trades_detail": [],
+    "2025-11-04": {
+        "date": "2025-11-04",
+        "total_trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0.0,
+        "total_entry_amount": 0.0,
+        "day_roe": 0.0,
+        "trades_detail": []
+    }
+}

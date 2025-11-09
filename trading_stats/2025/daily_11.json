@@ -1,0 +1,118 @@
+{
+  "year": 2025,
+  "month": 11,
+  "days": {
+    "2025-11-03": {
+      "total_trades": 1,
+      "wins": 0,
+      "losses": 1,
+      "total_pnl": -0.003272999999999725,
+      "win_rate": 0.0,
+      "trades": [
+        {
+          "symbol": "HIPPO",
+          "order_id": "1616837063",
+          "entry_price": 0.001833,
+          "exit_price": 0.001832,
+          "quantity": 3273.0,
+          "profit_pct": -0.054555373704305285,
+          "profit_amount": -0.003272999999999725,
+          "final_exit_profit": -0.003272999999999725,
+          "partial_exit_profit": 0.0,
+          "partial_exit_count": 0,
+          "timestamp": "2025-11-04T07:30:52.404394+00:00",
+          "trade_type": "loss",
+          "entry_conditions": {},
+          "exit_conditions": {},
+          "position_management": {
+            "partial_exit_count": 0,
+            "partial_exits": [],
+            "accumulated_pnl": 0.0,
+            "final_exit_pnl": -0.003272999999999725,
+            "total_pnl": -0.003272999999999725
+          }
+        }
+      ],
+      "last_updated": "2025-11-04T07:30:52.406425+00:00"
+    },
+    "2025-11-04": {
+      "total_trades": 5,
+      "wins": 1,
+      "losses": 0,
+      "total_pnl": 0.19358335740966265,
+      "win_rate": 100.0,
+      "trades": [
+        {
+          "symbol": "4",
+          "order_id": "DCA_SYNC",
+          "entry_price": 0.05835,
+          "exit_price": 0,
+          "quantity": 0,
+          "profit_pct": 0,
+          "profit_amount": 1.070800000000001,
+          "timestamp": "2025-11-05T01:20:39.397983+00:00",
+          "trade_type": "win",
+          "entry_conditions": {
+            "sync_type": "DCA_completed"
+          },
+          "exit_conditions": {
+            "sync_type": "DCA_completed"
+          },
+          "position_management": {
+            "dca_stage": "completed"
+          }
+        },
+        {
+          "symbol": "1000WHY",
+          "order_id": "DCA_SYNC",
+          "entry_price": 2.22e-05,
+          "exit_price": 0,
+          "quantity": 0,
+          "profit_pct": 0,
+          "profit_amount": 0.35014910000000005,
+          "timestamp": "2025-11-05T03:22:31.961426+00:00",
+          "trade_type": "win",
+          "entry_conditions": {
+            "sync_type": "DCA_completed"
+          },
+          "exit_conditions": {
+            "sync_type": "DCA_completed"
+          },
+          "position_management": {
+            "dca_stage": "completed"
+          }
+        }
+      ],
+      "last_updated": "2025-11-05T07:16:46.344714+00:00"
+    },
+    "2025-11-05": {
+      "total_trades": 1,
+      "wins": 0,
+      "losses": 0,
+      "total_pnl": 0,
+      "win_rate": 0,
+      "trades": [],
+      "last_updated": "2025-11-06T02:41:12.916753+00:00"
+    },
+    "2025-11-06": {
+      "total_trades": 3,
+      "wins": 1,
+      "losses": 0,
+      "total_pnl": 0.6153683400000001,
+      "win_rate": 100.0,
+      "trades": [],
+      "last_updated": "2025-11-07T07:23:53.002797+00:00"
+    }
+  },
+  "summary": {
+    "total_trades": 10,
+    "wins": 2,
+    "losses": 1,
+    "total_pnl": 0.805678697409663,
+    "win_rate": 20.0,
+    "best_day": "2025-11-06",
+    "best_day_pnl": 0.6153683400000001,
+    "worst_day": "2025-11-03",
+    "worst_day_pnl": -0.003272999999999725
+  }
+}
