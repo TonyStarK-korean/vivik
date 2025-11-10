@@ -1,0 +1,23 @@
+[Unit]
+Description=Alpha-Z Triple Strategy Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/vivik
+ExecStart=/usr/bin/python3 /root/vivik/alpha_z_triple_strategy.py --scan
+Restart=always
+RestartSec=10
+StandardOutput=append:/root/vivik/logs/alpha_z_trading.log
+StandardError=append:/root/vivik/logs/alpha_z_error.log
+
+# 환경 변수 (필요시)
+Environment="PYTHONUNBUFFERED=1"
+
+# 리소스 제한
+MemoryLimit=2G
+CPUQuota=80%
+
+[Install]
+WantedBy=multi-user.target
