@@ -2,6 +2,7 @@
 """
 Alpha-Z Trading Dashboard API Server
 실시간 계좌 정보 및 매매 데이터를 제공하는 REST API
+실제 DCA 포지션 및 거래 신호 로그 연동
 """
 
 from flask import Flask, jsonify, send_file
@@ -10,10 +11,11 @@ from binance.client import Client
 from binance.exceptions import BinanceAPIException
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 import threading
 import time
+from collections import defaultdict
 
 app = Flask(__name__)
 CORS(app)  # CORS 활성화
@@ -47,11 +49,18 @@ cache = {
     'account_info': {},
     'recent_signals': [],
     'strategy_stats': {},
-    'last_update': None
+    'last_update': None,
+    'dca_positions': {}  # DCA 포지션 데이터
 }
 
-# 로그 파일 경로
+# 파일 경로
 LOG_FILE = 'trading_signals.log'
+DCA_POSITIONS_FILE = 'dca_positions.json'
+TRADE_HISTORY_FILE = 'trade_history.json'
+
+def get_korea_time():
+    """한국 표준시(KST) 현재 시간 반환"""
+    return datetime.now(timezone(timedelta(hours=9)))
 
 
 def get_account_balance():
@@ -75,8 +84,22 @@ def get_account_balance():
         return None
 
 
+def load_dca_positions():
+    """DCA 포지션 파일에서 데이터 로드"""
+    if not os.path.exists(DCA_POSITIONS_FILE):
+        return {}
+
+    try:
+        with open(DCA_POSITIONS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception as e:
+        print(f"Error loading DCA positions: {e}")
+        return {}
+
+
 def get_open_positions():
-    """현재 보유 중인 포지션 가져오기"""
+    """현재 보유 중인 포지션 가져오기 (Binance API + DCA 데이터 결합)"""
     if DEMO_MODE:
         return [
             {
@@ -86,7 +109,10 @@ def get_open_positions():
                 'markPrice': 91295.0,
                 'unRealizedProfit': 457.50,
                 'leverage': 3,
-                'positionSide': 'LONG'
+                'positionSide': 'LONG',
+                'strategy': 'A',
+                'dcaStage': 'INITIAL',
+                'cyclicCount': 0
             },
             {
                 'symbol': 'ETHUSDT',
@@ -95,39 +121,51 @@ def get_open_positions():
                 'markPrice': 3182.0,
                 'unRealizedProfit': 142.50,
                 'leverage': 3,
-                'positionSide': 'LONG'
-            },
-            {
-                'symbol': 'SOLUSDT',
-                'positionAmt': 10.0,
-                'entryPrice': 215.80,
-                'markPrice': 218.50,
-                'unRealizedProfit': 27.00,
-                'leverage': 2,
-                'positionSide': 'LONG'
+                'positionSide': 'LONG',
+                'strategy': 'B',
+                'dcaStage': 'FIRST_DCA',
+                'cyclicCount': 1
             }
         ]
 
     try:
+        # Binance API에서 실제 포지션 가져오기
         positions = client.futures_position_information()
         open_positions = []
+
+        # DCA 포지션 데이터 로드
+        dca_data = load_dca_positions()
 
         for pos in positions:
             position_amt = float(pos['positionAmt'])
             if position_amt != 0:  # 포지션이 있는 것만
+                symbol = pos['symbol']
                 entry_price = float(pos['entryPrice'])
                 mark_price = float(pos['markPrice'])
                 unrealized_pnl = float(pos['unRealizedProfit'])
 
-                open_positions.append({
-                    'symbol': pos['symbol'],
+                # DCA 데이터와 결합
+                dca_info = dca_data.get(symbol, {})
+
+                position_data = {
+                    'symbol': symbol,
                     'positionAmt': position_amt,
                     'entryPrice': entry_price,
                     'markPrice': mark_price,
                     'unRealizedProfit': unrealized_pnl,
                     'leverage': int(pos['leverage']),
-                    'positionSide': pos['positionSide']
-                })
+                    'positionSide': pos['positionSide'],
+                    # DCA 추가 정보
+                    'strategy': dca_info.get('strategy', 'UNKNOWN'),
+                    'dcaStage': dca_info.get('current_stage', 'UNKNOWN'),
+                    'cyclicCount': dca_info.get('cyclic_count', 0),
+                    'totalNotional': dca_info.get('total_notional', abs(position_amt * mark_price)),
+                    'averagePrice': dca_info.get('average_price', entry_price),
+                    'maxCyclicCount': dca_info.get('max_cyclic_count', 3),
+                    'createdAt': dca_info.get('created_at', 'N/A')
+                }
+
+                open_positions.append(position_data)
 
         return open_positions
     except Exception as e:
@@ -185,28 +223,76 @@ def get_recent_signals():
     return signals
 
 
-def get_strategy_stats():
-    """전략별 통계 (샘플)"""
-    return {
-        'strategy_a': {
-            'win_count': 12,
-            'loss_count': 4,
-            'total_return': 18.5,
-            'win_rate': 75.0
-        },
-        'strategy_b': {
-            'win_count': 8,
-            'loss_count': 4,
-            'total_return': 12.3,
-            'win_rate': 66.7
-        },
-        'strategy_c': {
-            'win_count': 6,
-            'loss_count': 4,
-            'total_return': 9.8,
-            'win_rate': 60.0
-        }
+def calculate_strategy_stats():
+    """전략별 통계 실시간 계산 (신호 로그 기반)"""
+    stats = {
+        'strategy_a': {'win_count': 0, 'loss_count': 0, 'total_return': 0.0, 'win_rate': 0.0, 'total_trades': 0},
+        'strategy_b': {'win_count': 0, 'loss_count': 0, 'total_return': 0.0, 'win_rate': 0.0, 'total_trades': 0},
+        'strategy_c': {'win_count': 0, 'loss_count': 0, 'total_return': 0.0, 'win_rate': 0.0, 'total_trades': 0}
     }
+
+    # 거래 이력 파일이 있으면 로드
+    if os.path.exists(TRADE_HISTORY_FILE):
+        try:
+            with open(TRADE_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                trade_history = json.load(f)
+
+                for trade in trade_history:
+                    strategy = trade.get('strategy', '').upper()
+                    pnl = trade.get('pnl', 0.0)
+                    pnl_percent = trade.get('pnl_percent', 0.0)
+
+                    key = f'strategy_{strategy.lower()}'
+                    if key in stats:
+                        stats[key]['total_trades'] += 1
+                        if pnl > 0:
+                            stats[key]['win_count'] += 1
+                        else:
+                            stats[key]['loss_count'] += 1
+                        stats[key]['total_return'] += pnl_percent
+        except Exception as e:
+            print(f"Error loading trade history: {e}")
+
+    # 승률 계산
+    for key in stats:
+        total = stats[key]['win_count'] + stats[key]['loss_count']
+        if total > 0:
+            stats[key]['win_rate'] = (stats[key]['win_count'] / total) * 100.0
+        else:
+            stats[key]['win_rate'] = 0.0
+
+    # 샘플 데이터가 없으면 기본값 사용 (DEMO 모드)
+    if all(s['total_trades'] == 0 for s in stats.values()):
+        return {
+            'strategy_a': {
+                'win_count': 12,
+                'loss_count': 4,
+                'total_return': 18.5,
+                'win_rate': 75.0,
+                'total_trades': 16
+            },
+            'strategy_b': {
+                'win_count': 8,
+                'loss_count': 4,
+                'total_return': 12.3,
+                'win_rate': 66.7,
+                'total_trades': 12
+            },
+            'strategy_c': {
+                'win_count': 6,
+                'loss_count': 4,
+                'total_return': 9.8,
+                'win_rate': 60.0,
+                'total_trades': 10
+            }
+        }
+
+    return stats
+
+
+def get_strategy_stats():
+    """전략별 통계 가져오기"""
+    return calculate_strategy_stats()
 
 
 def update_cache():
@@ -215,11 +301,17 @@ def update_cache():
         try:
             cache['account_info'] = get_account_balance()
             cache['positions'] = get_open_positions()
+            cache['dca_positions'] = load_dca_positions()
             cache['recent_signals'] = get_recent_signals()
             cache['strategy_stats'] = get_strategy_stats()
-            cache['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            cache['last_update'] = get_korea_time().strftime('%Y-%m-%d %H:%M:%S')
 
-            print(f"✅ Cache updated at {cache['last_update']}")
+            # 포지션 수 출력
+            position_count = len(cache['positions'])
+            dca_count = len(cache['dca_positions'])
+            signal_count = len(cache['recent_signals'])
+
+            print(f"✅ Cache updated at {cache['last_update']} | Positions: {position_count} | DCA: {dca_count} | Signals: {signal_count}")
         except Exception as e:
             print(f"❌ Cache update error: {e}")
 

@@ -162,14 +162,21 @@ class FifteenMinuteMegaStrategy:
             print("[WARN] WebSocket OHLCV 제공자 없음")
         
         # DCA 매니저 초기화 (레버리지 20배)
-        if HAS_DCA_MANAGER:
-            self.dca_manager = ImprovedDCAPositionManager()
+        if HAS_DCA_MANAGER and self.private_exchange:
+            self.dca_manager = ImprovedDCAPositionManager(
+                exchange=self.private_exchange,
+                telegram_bot=self.telegram_bot,
+                stats_callback=None,  # 필요시 콜백 추가
+                strategy=self  # 전략 참조 전달
+            )
             # 레버리지 20배로 설정 업데이트
-            self.dca_manager.leverage = 20.0
+            self.dca_manager.config['initial_leverage'] = 20.0
+            self.dca_manager.config['first_dca_leverage'] = 20.0
+            self.dca_manager.config['second_dca_leverage'] = 20.0
             print("[INFO] DCA 매니저 초기화 완료 - 레버리지 20배 적용")
         else:
             self.dca_manager = None
-            print("[WARN] DCA 매니저 없음")
+            print("[WARN] DCA 매니저 없음 - 프라이빗 API 필요")
         
         # 캐시 시스템
         self._ohlcv_cache = {}
@@ -2932,7 +2939,8 @@ class FifteenMinuteMegaStrategy:
             if order['status'] == 'closed' or order['filled'] > 0:
                 filled_qty = order['filled']
                 filled_price = order['average'] or price
-                
+                notional = filled_qty * filled_price
+
                 # active_positions에 추가
                 self.active_positions[symbol] = {
                     'size': filled_qty,
@@ -2941,16 +2949,32 @@ class FifteenMinuteMegaStrategy:
                     'leverage': leverage,
                     'order_id': order['id']
                 }
-                
+
                 print(f"✅ 실전 진입 완료: {GREEN}{clean_symbol}{RESET}")
                 print(f"   💰 진입가: ${filled_price:,.4f}")
                 print(f"   📊 수량: {filled_qty:.6f}")
                 print(f"   🔥 레버리지: {leverage}배")
                 print(f"   💵 투입금액: ${position_value:.0f} USDT")
                 print(f"   📋 주문ID: {order['id']}")
-                
-                # DCA 주문 등록
-                self._place_dca_orders(symbol, filled_price, quantity)
+
+                # DCA 매니저에 포지션 등록 (자동으로 1차, 2차 DCA 주문 생성)
+                if self.dca_manager:
+                    dca_success = self.dca_manager.add_position(
+                        symbol=symbol,
+                        entry_price=filled_price,
+                        quantity=filled_qty,
+                        notional=notional,
+                        leverage=leverage,
+                        total_balance=free_usdt
+                    )
+                    if dca_success:
+                        print(f"   ✅ DCA 시스템 등록 완료 - 자동 1차/2차 주문 생성됨")
+                    else:
+                        print(f"   ⚠️ DCA 시스템 등록 실패 - 수동 관리 필요")
+                else:
+                    # DCA 매니저 없으면 기존 방식 사용 (폴백)
+                    print(f"   ⚠️ DCA 매니저 없음 - 기본 주문만 실행")
+                    self._place_dca_orders(symbol, filled_price, quantity)
                 
                 # 텔레그램 성공 알림 (중복 방지) - 상세 정보 포함
                 portfolio = self.get_portfolio_summary()
@@ -3193,7 +3217,123 @@ class FifteenMinuteMegaStrategy:
             
         except Exception as e:
             self.logger.error(f"실제 포지션 상태 체크 실패: {e}")
-    
+
+    def _verify_dca_orders(self):
+        """DCA 지정가 주문 검증 및 누락/중복 조정"""
+        try:
+            if not self.dca_manager:
+                return
+
+            print(f"\n🔍 DCA 주문 검증 시작...")
+
+            # 모든 활성 포지션 확인
+            for symbol, position in self.dca_manager.positions.items():
+                if not position.is_active:
+                    continue
+
+                clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
+
+                try:
+                    # 거래소에서 실제 포지션 정보 조회
+                    exchange_positions = self.private_exchange.fetch_positions([symbol])
+                    current_position = None
+                    for pos in exchange_positions:
+                        if pos['contracts'] > 0 and pos['symbol'] == symbol:
+                            current_position = pos
+                            break
+
+                    if not current_position:
+                        print(f"   ⚠️ {clean_symbol}: 거래소에 포지션 없음 (동기화 필요)")
+                        continue
+
+                    # Initial margin 기반 현재 비중 계산
+                    initial_margin = current_position.get('initialMargin', 0)
+                    notional_value = current_position.get('notional', 0)
+                    contracts = current_position.get('contracts', 0)
+                    entry_price = current_position.get('entryPrice', 0)
+
+                    # 잔고 조회
+                    balance = self.private_exchange.fetch_balance()
+                    total_balance = balance['USDT']['total']
+
+                    if total_balance > 0 and notional_value > 0:
+                        current_weight = (abs(notional_value) / total_balance) * 100
+                        print(f"   📊 {clean_symbol}: 현재 비중 {current_weight:.2f}% (Notional: ${abs(notional_value):.0f})")
+                    else:
+                        current_weight = 0
+
+                    # 미결 주문 조회
+                    open_orders = self.private_exchange.fetch_open_orders(symbol)
+
+                    # DCA 주문 분류 (1차, 2차)
+                    dca1_orders = []
+                    dca2_orders = []
+                    stop_orders = []
+
+                    for order in open_orders:
+                        order_price = order.get('price', 0)
+                        order_type = order.get('type', '')
+                        order_side = order.get('side', '')
+
+                        if order_side == 'buy' and order_type == 'limit':
+                            # DCA 1차: 진입가 대비 -3% 근처
+                            if entry_price * 0.96 < order_price < entry_price * 0.98:
+                                dca1_orders.append(order)
+                            # DCA 2차: 진입가 대비 -6% 근처
+                            elif entry_price * 0.93 < order_price < entry_price * 0.95:
+                                dca2_orders.append(order)
+                        elif order_side == 'sell' and 'stop' in order_type.lower():
+                            stop_orders.append(order)
+
+                    # 검증 결과 출력
+                    print(f"   • 1차 DCA: {len(dca1_orders)}개, 2차 DCA: {len(dca2_orders)}개, 손절: {len(stop_orders)}개")
+
+                    # 누락된 주문 확인 및 재생성
+                    if len(dca1_orders) == 0:
+                        print(f"   ⚠️ {clean_symbol}: 1차 DCA 주문 누락 - 재생성 필요")
+                        # DCA 매니저를 통해 재생성 시도
+                        # 여기서는 로그만 출력 (실제 재생성은 DCA 매니저가 자동으로 처리)
+
+                    if len(dca2_orders) == 0:
+                        print(f"   ⚠️ {clean_symbol}: 2차 DCA 주문 누락 - 재생성 필요")
+
+                    # 중복된 주문 확인
+                    if len(dca1_orders) > 1:
+                        print(f"   ⚠️ {clean_symbol}: 1차 DCA 주문 중복 ({len(dca1_orders)}개) - 조정 필요")
+                        # 가장 최근 주문 제외하고 나머지 취소
+                        for order in dca1_orders[:-1]:
+                            try:
+                                self.private_exchange.cancel_order(order['id'], symbol)
+                                print(f"      ✅ 중복 주문 취소: {order['id']}")
+                            except Exception as e:
+                                print(f"      ⚠️ 주문 취소 실패: {e}")
+
+                    if len(dca2_orders) > 1:
+                        print(f"   ⚠️ {clean_symbol}: 2차 DCA 주문 중복 ({len(dca2_orders)}개) - 조정 필요")
+                        for order in dca2_orders[:-1]:
+                            try:
+                                self.private_exchange.cancel_order(order['id'], symbol)
+                                print(f"      ✅ 중복 주문 취소: {order['id']}")
+                            except Exception as e:
+                                print(f"      ⚠️ 주문 취소 실패: {e}")
+
+                    # 순환매 상태 확인
+                    if position.cyclic_state != 'NORMAL_DCA':
+                        print(f"   🔄 {clean_symbol}: 순환매 상태 - {position.cyclic_state} (사이클: {position.cyclic_count}/3)")
+
+                        # 부분 청산 후 재진입 확인
+                        if position.cyclic_count > 0 and len(dca1_orders) == 0 and len(dca2_orders) == 0:
+                            print(f"   ⚠️ {clean_symbol}: 순환매 후 DCA 주문 누락 - 재생성 필요")
+
+                except Exception as e:
+                    print(f"   ❌ {clean_symbol} 검증 실패: {e}")
+                    continue
+
+            print(f"   ✅ DCA 주문 검증 완료\n")
+
+        except Exception as e:
+            print(f"   ❌ DCA 주문 검증 실패: {e}\n")
+
     def run_continuous_scan(self, interval=30):
         """🚀 IP 밴 방지 최고속도 연속 스캔 실행"""
         print("🚀 15분봉 초필살기 전략 연속 스캔 시작 (🔥 실전매매 모드 🔥)")
@@ -3263,9 +3403,53 @@ class FifteenMinuteMegaStrategy:
                     else:
                         print(f"⚠️ {signal['clean_symbol']} 거래 건너뛰기 (상태: {signal.get('status', 'unknown')})")
                 
+                # DCA 매니저와 거래소 동기화 (주기적 포지션 확인, DCA 주문 검증)
+                if self.dca_manager:
+                    try:
+                        print(f"\n🔄 DCA 시스템 동기화 중...")
+                        self.dca_manager.sync_with_exchange()
+
+                        # 활성 포지션 확인 및 검증
+                        active_count = len([p for p in self.dca_manager.positions.values() if p.is_active])
+                        print(f"   ✅ DCA 동기화 완료 - 활성 포지션: {active_count}개")
+
+                        # DCA 주문 상태 검증 (누락/중복 확인 및 조정)
+                        self._verify_dca_orders()
+
+                        # 출구 전략 체크 (SuperTrend, BB600, 누적수익보호 등)
+                        if active_count > 0:
+                            try:
+                                # 현재 가격 조회
+                                current_prices = {}
+                                for symbol, position in self.dca_manager.positions.items():
+                                    if position.is_active:
+                                        try:
+                                            ticker = self.private_exchange.fetch_ticker(symbol)
+                                            current_prices[symbol] = ticker['last']
+                                        except:
+                                            pass
+
+                                # 출구 전략 체크 (DCA 매니저가 자동으로 처리)
+                                # sync_with_exchange()에서 이미 처리되므로 별도 호출 불필요
+
+                                # 순환매 통계 출력
+                                cyclic_stats = self.dca_manager.get_cyclic_statistics()
+                                if cyclic_stats['total_positions'] > 0:
+                                    print(f"\n   🔄 순환매 통계:")
+                                    print(f"      • 전체 포지션: {cyclic_stats['total_positions']}개")
+                                    print(f"      • 순환매 활성: {cyclic_stats['cyclic_active']}개")
+                                    print(f"      • 평균 사이클: {cyclic_stats['avg_cyclic_count']:.2f}회")
+                                    print(f"      • 총 순환매 수익: ${cyclic_stats['total_cyclic_profit']:.0f}")
+
+                            except Exception as e:
+                                print(f"   ⚠️ 출구 전략 체크 실패: {e}")
+
+                    except Exception as e:
+                        print(f"   ⚠️ DCA 동기화 실패: {e}")
+
                 # 실제 포지션 상태 체크 (DCA 주문 체결 확인)
                 self.check_real_position_status()
-                
+
                 # 실제 포트폴리오 현황 출력
                 portfolio = self.get_portfolio_summary()
                 print(f"\n📊 실제 포트폴리오 현황:")
