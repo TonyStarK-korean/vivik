@@ -357,13 +357,20 @@ class FifteenMinuteMegaStrategy:
                 # 디버그 출력
                 if result.get('status') == 'entry_signal':
                     c_signal = details.get('strategy_c', {}).get('signal', False)
-                    print(f"🔍 DEBUG: {clean_symbol} - A신호:{details['strategy_a']['signal']}, B신호:{details['strategy_b']['signal']}, C신호:{c_signal}, A통과:{a_passed}/5, B통과:{b_passed}/6, C통과:{c_passed}/4")
-                
+                    a_signal = details['strategy_a']['signal']
+                    b_signal = details['strategy_b']['signal']
+
+                    print(f"🔍 [전략분류] {clean_symbol} - A:{a_signal}, B:{b_signal}, C:{c_signal} | 통과: A={a_passed}/5, B={b_passed}/6, C={c_passed}/4")
+
+                    # MA80>MA480인데 A전략 신호인 경우 경고
+                    if a_signal:
+                        # A전략 조건1 체크
+                        a_cond1_check = any('[A전략 조건1]' in str(cond) and 'False' in str(cond) for cond in result.get('conditions', []))
+                        if a_cond1_check:
+                            print(f"🚨 [분류 오류 의심] {clean_symbol}: A전략 신호인데 조건1=False!")
+
                 # A전략 분류 (5개 조건 기준)
                 if details['strategy_a']['signal']:
-                    # BNT, GPS 같은 문제 심볼에 대한 디버깅
-                    if clean_symbol in ['BNT', 'GPS', 'BARD', 'LINK']:
-                        print(f"⚠️ 의심스러운 A전략 신호: {clean_symbol}")
                     a_entry_signals.append(a_result_data)
                 elif a_passed == 4:  # 1개만 미충족
                     a_near_entry.append(a_result_data)
@@ -435,12 +442,13 @@ class FifteenMinuteMegaStrategy:
             return failed_conds
 
         # 🅰️ A전략(바닥타점) 결과
-        print(f"\n🅰️ A전략(바닥타점) 결과")
+        print(f"\n🅰️ A전략(바닥타점) 결과 - MA80<MA480 필수")
         print(f"{'='*60}")
-        
+
         if a_entry_signals:
             print(f"┌{'─'*30}┐")
             print(f"│   🔥 진입신호 ({len(a_entry_signals)}개)        │")
+            print(f"│   (조건: MA80<MA480)     │")
             print(f"└{'─'*30}┘")
             # 2x2 배치
             for i in range(0, len(a_entry_signals), 2):
@@ -500,12 +508,13 @@ class FifteenMinuteMegaStrategy:
             print(f"└{'─'*30}┘")
         
         # 🅱️ B전략(급등초입) 결과
-        print(f"\n🅱️ B전략(급등초입) 결과")
+        print(f"\n🅱️ B전략(급등초입) 결과 - 골든크로스 후 진입")
         print(f"{'='*60}")
-        
+
         if b_entry_signals:
             print(f"┌{'─'*30}┐")
             print(f"│   🔥 진입신호 ({len(b_entry_signals)}개)        │")
+            print(f"│   (MA80 >= MA480 OK)    │")
             print(f"└{'─'*30}┘")
             # 2x2 배치
             for i in range(0, len(b_entry_signals), 2):
@@ -565,12 +574,13 @@ class FifteenMinuteMegaStrategy:
             print(f"└{'─'*30}┘")
         
         # 🇨 C전략(3분봉 바닥급등타점) 결과
-        print(f"\n🇨 C전략(3분봉 바닥급등타점) 결과")
+        print(f"\n🇨 C전략(3분봉 바닥급등타점) 결과 - 3분봉 독립")
         print(f"{'='*60}")
-        
+
         if c_entry_signals:
             print(f"┌{'─'*30}┐")
             print(f"│   🔥 진입신호 ({len(c_entry_signals)}개)        │")
+            print(f"│   (15분봉 MA 무관)      │")
             print(f"└{'─'*30}┘")
             # 2x2 배치
             for i in range(0, len(c_entry_signals), 2):
@@ -672,12 +682,14 @@ class FifteenMinuteMegaStrategy:
         final_entry_signals = list(unique_signals.values())
         
         if final_entry_signals:
-            print(f"\n🎯 전체 진입신호 통합 ({len(final_entry_signals)}개)")
-            print(f"{'─'*40}")
+            print(f"\n{'='*60}")
+            print(f"🎯 전체 진입신호 통합 ({len(final_entry_signals)}개)")
+            print(f"   ⚠️  주의: 각 종목이 어느 전략 신호인지 확인하세요!")
+            print(f"{'='*60}")
             for signal in final_entry_signals:
                 clean_symbol = signal['symbol'].replace('/USDT:USDT', '')
                 strategy_type = signal['strategy_type']
-                print(f"   🎯 {GREEN}{clean_symbol}{RESET} {strategy_type}")
+                print(f"   🎯 {GREEN}{clean_symbol:<10}{RESET} {strategy_type}")
         else:
             print(f"\n🎯 전체 진입신호 통합 (없음)")
     
@@ -961,41 +973,25 @@ class FifteenMinuteMegaStrategy:
         
         try:
             clean_sym = symbol.replace('/USDT:USDT', '')
-            # print(f"*** FIXED VERSION: {clean_sym} ***")  # 디버그용 주석처리
-            
-            # 🔥 CRITICAL FIX: 15분봉 MA80 < MA480 전제조건 체크
-            ma80_15m = df_calc['ma80'].iloc[-1]  # 15분봉 MA80
-            ma5_15m = df_calc['ma5'].iloc[-1]   # 15분봉 MA5
-            ma480_15m = df_calc['ma480'].iloc[-1]  # 15분봉 MA480
-            
-            # 15분봉 MA480 데이터 유효성 체크
+
+            # 15분봉 MA 데이터 유효성 체크 (MA480 계산 가능 여부만 확인)
+            ma80_15m = df_calc['ma80'].iloc[-1]
+            ma5_15m = df_calc['ma5'].iloc[-1]
+            ma480_15m = df_calc['ma480'].iloc[-1]
+
             if pd.isna(ma480_15m) or pd.isna(ma80_15m) or pd.isna(ma5_15m):
-                conditions.append(f"[BLOCKED] 15분봉 MA480 계산 실패 - 데이터 부족 (필요:480봉, 현재:{len(df_15m)})")
+                conditions.append(f"[BLOCKED] 15분봉 MA 계산 실패 - 데이터 부족 (필요:480봉, 현재:{len(df_15m)})")
                 return False, conditions, {
                     'strategy_a': {'signal': False, 'conditions': conditions, 'name': 'A전략(MA계산실패)'},
                     'strategy_b': {'signal': False, 'conditions': [], 'name': 'B전략(MA계산실패)'},
                     'strategy_c': {'signal': False, 'conditions': [], 'name': 'C전략(MA계산실패)'}
                 }
-            
-            # 강제 전제조건: 15분봉 MA80 < MA480 AND 15분봉 MA5 < MA480
-            basic_ma_condition = (ma80_15m < ma480_15m and ma5_15m < ma480_15m)
-            
-            # 전제조건 미충족시 강제로 False 반환
-            if not basic_ma_condition:
-                clean_sym = symbol.replace('/USDT:USDT', '')
-                if clean_sym in ['BARD', 'LINK', 'BULLA', 'MUBARAK', 'MELANIA', 'METIS', 'TRADOOR', 'BNT', 'GPS']:  # 문제 심볼들만 로그 출력
-                    print(f"🚫 MA80>MA480 차단: {clean_sym} - MA80:{ma80_15m:.4f} >= MA480:{ma480_15m:.4f}")
-                conditions.append(f"[BLOCKED] 15분봉MA80≥MA480 전제조건 차단 - MA80:{ma80_15m:.6f}, MA480:{ma480_15m:.6f}")
-                return False, conditions, {
-                    'strategy_a': {'signal': False, 'conditions': conditions, 'name': 'A전략(차단됨)'},
-                    'strategy_b': {'signal': False, 'conditions': [], 'name': 'B전략(차단됨)'},
-                    'strategy_c': {'signal': False, 'conditions': [], 'name': 'C전략(차단됨)'}
-                }
-            
-            # 전제조건 통과시에만 전략 체크 실행
-            # 전제조건 통과한 심볼에 대한 로그는 제거 (너무 많음)
-            
-            # A전략: 15분봉 바닥 타점 체크
+
+            # ✅ 전제조건 제거: MA80 < MA480 조건은 A전략 조건1에서만 체크
+            # B전략: 골든크로스 이후 진입 가능 (MA80 >= MA480 OK)
+            # C전략: 3분봉 독립 전략
+
+            # A전략: 15분봉 바닥 타점 체크 (조건1에 MA80<MA480 포함)
             strategy_a_signal, strategy_a_conditions = self._check_strategy_a_bottom_entry(symbol, df_calc)
             
             # B전략: 15분봉 급등초입 타점 체크
@@ -1268,9 +1264,12 @@ class FifteenMinuteMegaStrategy:
             
             # A전략 최종 판정: 모든 조건 충족
             strategy_a_signal = condition1 and condition2 and condition3 and condition4 and condition5
-            
-            
-            
+
+            # 디버그: MA80>MA480인데 신호가 나오는 경우 경고
+            if strategy_a_signal and not condition1:
+                clean_sym = symbol.replace('/USDT:USDT', '')
+                print(f"🚨 [A전략 로직 오류] {clean_sym}: condition1=False인데 signal=True! MA80:{ma80:.4f}, MA480:{ma480:.4f}")
+
             return strategy_a_signal, conditions
             
         except Exception as e:
