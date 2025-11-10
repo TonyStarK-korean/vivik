@@ -53,12 +53,15 @@ class PositionStage(Enum):
     CLOSING = "closing"          # 청산 중
 
 class ExitType(Enum):
-    """청산 타입 - 새로운 5가지 청산 방식"""
+    """청산 타입 - 새로운 8가지 청산 방식"""
     SUPERTREND_EXIT = "supertrend_exit"       # SuperTrend 전량청산
+    PROFIT_10_PERCENT_EXIT = "profit_10_percent_exit" # 10% 수익 달성시 50% 익절청산
     BB600_PARTIAL_EXIT = "bb600_partial_exit" # BB600 50% 익절청산
     BREAKEVEN_PROTECTION = "breakeven_protection" # 절반 하락 청산
     WEAK_RISE_DUMP_PROTECTION = "weak_rise_dump_protection" # 약상승후 급락 리스크 회피
+    BB80_BB600_REVERSAL_EXIT = "bb80_bb600_reversal_exit" # BB80-BB600 역전 기간 전량청산
     DCA_CYCLIC_EXIT = "dca_cyclic_exit"       # DCA 순환매 일부청산
+    TIME_BASED_EXIT = "time_based_exit"       # 시간 기반 자동 청산 (2시간+5% 미만)
 
 class CyclicState(Enum):
     """순환매 상태"""
@@ -112,6 +115,9 @@ class DCAPosition:
     trailing_stop_active: bool = False  # 트레일링 스탑 활성화 여부
     trailing_stop_high: float = 0.0  # 트레일링 스탑 최고가 추적
     trailing_stop_percentage: float = 0.05  # 트레일링 스탑 비율 (5%)
+    
+    # 시간 기반 청산 관련 필드
+    time_based_exit_done: bool = False  # 시간 기반 청산 완료 여부 (중복 방지)
 
 class ImprovedDCAPositionManager:
     """개선된 순환매수 포지션 관리자"""
@@ -192,13 +198,112 @@ class ImprovedDCAPositionManager:
         # 🔧 이미 체결된 주문들에 대한 알림 기록 추가 (중복 방지)
         self._register_existing_filled_orders()
         
-        # 초기 동기화
-        if self.exchange and hasattr(self.exchange, 'apiKey') and self.exchange.apiKey:
-            self.logger.info("거래소와 DCA 시스템 초기 동기화 시작...")
-            self.sync_with_exchange(force_sync=True)
+        # 🔧 Exchange 연결 상태 추적 초기화
+        self._exchange_connection_issues = 0
+        self._last_exchange_check = 0
+        
+        # 초기 동기화 - 🔧 Exchange 연결 검증 강화
+        if self.exchange:
+            self.logger.info(f"🔍 Exchange 연결 상태 검증...")
+            self.logger.info(f"🔍 Exchange type: {type(self.exchange).__name__}")
+            self.logger.info(f"🔍 Has apiKey: {hasattr(self.exchange, 'apiKey')}")
+            
+            if hasattr(self.exchange, 'apiKey') and self.exchange.apiKey:
+                api_key_preview = self.exchange.apiKey[:8] + "..." if len(self.exchange.apiKey) > 8 else self.exchange.apiKey
+                self.logger.info(f"🔍 API Key: {api_key_preview} (길이: {len(self.exchange.apiKey)})")
+                
+                # 🔧 실제 API 연결 테스트
+                try:
+                    test_balance = self.exchange.fetch_balance()
+                    self.logger.info(f"✅ API 연결 테스트 성공 - USDT 잔고 확인")
+                    self.logger.info(f"거래소와 DCA 시스템 초기 동기화 시작...")
+                    self.sync_with_exchange(force_sync=True)
+                except Exception as api_test_error:
+                    self.logger.error(f"❌ API 연결 테스트 실패: {api_test_error}")
+                    if "apiKey" in str(api_test_error):
+                        self.logger.error(f"🚨 API 키 문제 감지 - DCA 동기화 건너뛰기")
+                        self._exchange_connection_issues += 1
+                    
+            else:
+                self.logger.warning(f"⚠️ API 키 없음 - DCA 동기화 건너뛰기")
+        else:
+            self.logger.warning(f"⚠️ Exchange 없음 - DCA 동기화 건너뛰기")
         
         self.logger.info(f"개선된 DCA 시스템 초기화 완료")
         self.logger.info(f"활성 포지션: {len([p for p in self.positions.values() if p.is_active])}개")
+
+    def _verify_exchange_connection(self) -> bool:
+        """Exchange 연결 상태 검증"""
+        try:
+            if not self.exchange:
+                return False
+            
+            # 현재 시간 체크 (너무 자주 체크하지 않도록)
+            current_time = time.time()
+            if current_time - self._last_exchange_check < 30:  # 30초 간격
+                return True
+            
+            self._last_exchange_check = current_time
+            
+            # API 키 존재 여부 확인
+            if not hasattr(self.exchange, 'apiKey') or not self.exchange.apiKey:
+                self.logger.warning(f"❌ Exchange API 키 없음")
+                return False
+            
+            # 간단한 API 호출 테스트
+            try:
+                self.exchange.fetch_balance()
+                self._exchange_connection_issues = 0  # 성공시 리셋
+                return True
+            except Exception as e:
+                self._exchange_connection_issues += 1
+                if "apiKey" in str(e):
+                    self.logger.error(f"❌ Exchange API 키 문제 #{self._exchange_connection_issues}: {e}")
+                    # 메인 전략에 재연결 요청
+                    if self.strategy and hasattr(self.strategy, '_request_exchange_reconnect'):
+                        self.strategy._request_exchange_reconnect = True
+                        self.logger.info(f"📨 메인 전략에 Exchange 재연결 요청 전송")
+                else:
+                    self.logger.warning(f"⚠️ Exchange 연결 문제 #{self._exchange_connection_issues}: {e}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Exchange 연결 검증 실패: {e}")
+            return False
+
+    def refresh_exchange_connection(self, new_exchange):
+        """메인 전략에서 호출 - Exchange 연결 갱신"""
+        try:
+            self.logger.info(f"🔄 Exchange 연결 갱신 요청 받음")
+            
+            if new_exchange and hasattr(new_exchange, 'apiKey') and new_exchange.apiKey:
+                old_exchange_id = id(self.exchange) if self.exchange else None
+                new_exchange_id = id(new_exchange)
+                
+                self.exchange = new_exchange
+                self._exchange_connection_issues = 0
+                self._last_exchange_check = 0
+                
+                self.logger.info(f"✅ Exchange 연결 갱신 완료")
+                self.logger.info(f"🔍 Old Exchange ID: {old_exchange_id}")
+                self.logger.info(f"🔍 New Exchange ID: {new_exchange_id}")
+                self.logger.info(f"🔍 API Key: {new_exchange.apiKey[:8]}... (길이: {len(new_exchange.apiKey)})")
+                
+                # 연결 테스트
+                try:
+                    test_balance = self.exchange.fetch_balance()
+                    self.logger.info(f"✅ 갱신된 Exchange 연결 테스트 성공")
+                    return True
+                except Exception as test_error:
+                    self.logger.error(f"❌ 갱신된 Exchange 연결 테스트 실패: {test_error}")
+                    return False
+            else:
+                self.logger.error(f"❌ 유효하지 않은 Exchange 객체")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Exchange 연결 갱신 실패: {e}")
+            return False
 
     def _update_average_price_safely(self, position: DCAPosition, new_avg_price: float, context: str = "unknown") -> bool:
         """평단가 안전 업데이트 (중앙화된 평단가 관리)"""
@@ -710,8 +815,16 @@ class ImprovedDCAPositionManager:
                 self.logger.info(f"새 포지션 추가: {symbol} - 진입가: {entry_price}, 수량: {quantity}")
 
                 # 📋 최초 진입 즉시 DCA 1차, 2차 지정가 주문 자동 생성
+                self.logger.info(f"🔍 DCA 지정가 주문 자동 생성 조건 확인: total_balance={total_balance}, exchange={self.exchange is not None}")
                 if total_balance and self.exchange:
+                    self.logger.info(f"🎯 DCA 지정가 주문 자동 생성 호출 시작: {symbol}")
                     self._create_initial_dca_limit_orders(position, total_balance)
+                    self.logger.info(f"🎯 DCA 지정가 주문 자동 생성 호출 완료: {symbol}")
+                else:
+                    if not total_balance:
+                        self.logger.warning(f"⚠️ DCA 지정가 주문 건너뛰기: total_balance가 없음 ({total_balance})")
+                    if not self.exchange:
+                        self.logger.warning(f"⚠️ DCA 지정가 주문 건너뛰기: exchange가 없음")
 
                 # 텔레그램 알림 제거 (메인 전략에서 통합 알림 전송)
                 # if self.telegram_bot:
@@ -745,7 +858,7 @@ class ImprovedDCAPositionManager:
             first_dca_leverage = self.config['first_dca_leverage']
             first_dca_quantity = (first_dca_amount * first_dca_leverage) / first_dca_price
 
-            # 🔒 완화된 안전장치: 현재가가 DCA 가격보다 1% 이상 낮으면 주문 건너뜀 (정상 진입 허용)
+            # 🔒 DCA 지정가 주문 안전장치 개선 (하락매수 허용)
             try:
                 current_price = float(current_price)
                 first_dca_price = float(first_dca_price)
@@ -753,10 +866,11 @@ class ImprovedDCAPositionManager:
                 self.logger.error(f"❌ 타입 변환 실패: current_price={current_price}, first_dca_price={first_dca_price}")
                 first_order_result = {'success': False, 'error': 'Price type conversion failed'}
                 
-            # 🔥 수정: 99% 기준으로 완화 (기존 95%는 너무 제한적)
-            if current_price < first_dca_price * 0.99:  # DCA 가격의 99% 미만일 때만 스킵
-                self.logger.warning(f"⚠️ 1차 DCA 주문 건너뜀: 현재가(${current_price:.6f}) < DCA가격의 99%(${first_dca_price*0.99:.6f})")
-                first_order_result = {'success': False, 'error': 'Current price too far below DCA trigger'}
+            # ✅ 수정된 안전장치: DCA는 하락매수이므로 현재가가 DCA가격보다 높아야 정상
+            # 현재가가 DCA 가격보다 20% 이상 낮으면 과도한 하락으로 판단하여 주문 보류
+            if current_price < first_dca_price * 0.80:  # DCA 가격의 80% 미만일 때만 스킵
+                self.logger.warning(f"⚠️ 1차 DCA 주문 보류: 과도한 하락 - 현재가(${current_price:.6f}) < DCA가격의 80%(${first_dca_price*0.80:.6f})")
+                first_order_result = {'success': False, 'error': 'Excessive price drop - DCA order postponed'}
             else:
                 first_order_result = self._execute_limit_order(
                     position.symbol,
@@ -789,7 +903,7 @@ class ImprovedDCAPositionManager:
             second_dca_leverage = self.config['second_dca_leverage']
             second_dca_quantity = (second_dca_amount * second_dca_leverage) / second_dca_price
 
-            # 🔒 완화된 안전장치: 현재가가 DCA 가격보다 1% 이상 낮으면 주문 건너뜀 (정상 진입 허용)
+            # 🔒 DCA 지정가 주문 안전장치 개선 (하락매수 허용)
             try:
                 current_price = float(current_price)
                 second_dca_price = float(second_dca_price)
@@ -797,10 +911,11 @@ class ImprovedDCAPositionManager:
                 self.logger.error(f"❌ 타입 변환 실패: current_price={current_price}, second_dca_price={second_dca_price}")
                 second_order_result = {'success': False, 'error': 'Price type conversion failed'}
                 
-            # 🔥 수정: 99% 기준으로 완화 (기존 95%는 너무 제한적)
-            if current_price < second_dca_price * 0.99:  # DCA 가격의 99% 미만일 때만 스킵
-                self.logger.warning(f"⚠️ 2차 DCA 주문 건너뜀: 현재가(${current_price:.6f}) < DCA가격의 99%(${second_dca_price*0.99:.6f})")
-                second_order_result = {'success': False, 'error': 'Current price too far below DCA trigger'}
+            # ✅ 수정된 안전장치: DCA는 하락매수이므로 현재가가 DCA가격보다 높아야 정상
+            # 현재가가 DCA 가격보다 20% 이상 낮으면 과도한 하락으로 판단하여 주문 보류
+            if current_price < second_dca_price * 0.80:  # DCA 가격의 80% 미만일 때만 스킵
+                self.logger.warning(f"⚠️ 2차 DCA 주문 보류: 과도한 하락 - 현재가(${current_price:.6f}) < DCA가격의 80%(${second_dca_price*0.80:.6f})")
+                second_order_result = {'success': False, 'error': 'Excessive price drop - DCA order postponed'}
             else:
                 second_order_result = self._execute_limit_order(
                     position.symbol,
@@ -1159,6 +1274,50 @@ class ImprovedDCAPositionManager:
             if stop_loss_result:
                 self.logger.critical(f"🚨 손절 트리거 감지: {symbol} - 수익률: {profit_pct*100:.2f}%")
                 return stop_loss_result
+                
+            # 1.2. 시간 기반 청산 체크 (2시간 + 5% 미만 조건) - 새로운 2순위
+            time_based_exit_trigger = self._check_time_based_exit(position, current_price, profit_pct)
+            if time_based_exit_trigger:
+                self.logger.critical(f"⏰ 시간 기반 청산 조건 충족: {symbol} - 보유시간: {time_based_exit_trigger['hold_hours']:.1f}시간, 수익률: {profit_pct*100:.2f}%")
+                # 실제 청산 실행
+                success = self._execute_emergency_exit(position, current_price, "time_based_exit")
+                if success:
+                    position.time_based_exit_done = True
+                    self.save_data()
+                    self.logger.critical(f"⏰ 시간 기반 청산 완료: {symbol}")
+                return {
+                    'trigger_activated': True,
+                    'action': 'time_based_exit_executed' if success else 'time_based_exit_failed',
+                    'trigger_info': time_based_exit_trigger
+                }
+                
+            # 1.5. BB80 > BB600 조건 + 원금수익률 5% 이상시 수동청산 전환 체크 (새로운 3순위)
+            manual_exit_trigger = self._check_bb80_bb600_manual_exit(symbol, current_price, profit_pct)
+            if manual_exit_trigger:
+                self.logger.critical(f"🎯 BB80>BB600 수동청산 조건 충족: {symbol} - 원금수익률: {profit_pct*100:.2f}%")
+                # 수동청산 전환이므로 실제 청산하지 않고 신호만 반환
+                return {
+                    'trigger_activated': True,
+                    'action': 'manual_exit_required',
+                    'trigger_info': manual_exit_trigger,
+                    'manual_exit': True  # 수동청산 플래그
+                }
+                
+            # 1.6. 최대 수익률 6-10% 구간에서 5% 보호 청산 체크 (새로운 1.5순위)
+            profit_protection_trigger = self._check_profit_protection_exit(symbol, current_price, profit_pct, position)
+            if profit_protection_trigger:
+                self.logger.critical(f"💰 수익 보호 청산 조건 충족: {symbol} - 최대수익률: {position.max_profit_pct*100:.2f}%, 현재: {profit_pct*100:.2f}%")
+                # 실제 청산 실행 (5% 수익 보장)
+                success = self._execute_emergency_exit(position, current_price, "profit_protection_exit")
+                if success:
+                    position.breakeven_protection_active = False  # 보호 모드 해제
+                    self.save_data()
+                    self.logger.critical(f"💰 수익 보호 청산 완료: {symbol}")
+                return {
+                    'trigger_activated': True,
+                    'action': 'profit_protection_executed' if success else 'profit_protection_failed',
+                    'trigger_info': profit_protection_trigger
+                }
                 
             # 2. SuperTrend 청산 확인 🔧 수정됨
             supertrend_exit = self.check_supertrend_exit_signal(symbol, current_price, position)
@@ -1685,10 +1844,9 @@ class ImprovedDCAPositionManager:
             position.cyclic_state = CyclicState.CYCLIC_ACTIVE.value
             position.last_cyclic_entry = get_korea_time().isoformat()
             
-            # 순환매 제한 체크
+            # 순환매 제한 체크 (참고용 - 실제 청산 모드는 최초진입가 기준으로 결정)
             if position.cyclic_count >= position.max_cyclic_count:
-                position.cyclic_state = CyclicState.CYCLIC_COMPLETE.value
-                self.logger.warning(f"🔴 순환매 완료: {position.symbol} - 최대 횟수 {position.max_cyclic_count}회 달성")
+                self.logger.warning(f"⚠️ 순환매 {position.max_cyclic_count}회 달성: {position.symbol} - 청산 모드는 최초진입가 기준으로 결정")
             
             # 데이터 저장
             self.save_data()
@@ -1715,6 +1873,15 @@ class ImprovedDCAPositionManager:
     def _execute_emergency_exit(self, position: DCAPosition, current_price: float, reason: str) -> bool:
         """긴급 전량 청산 (미체결 지정가 주문 자동 취소 포함)"""
         try:
+            # API 키 검증
+            if not self.exchange:
+                self.logger.error(f"청산 실패 - 거래소 연결 없음: {position.symbol}")
+                return {'success': False, 'silent': False, 'error': 'no_exchange'}
+            
+            if not hasattr(self.exchange, 'apiKey') or not self.exchange.apiKey:
+                self.logger.error(f"청산 실패 - API 키 없음: {position.symbol}")
+                return {'success': False, 'silent': False, 'error': 'no_api_key'}
+            
             # 🚨 중요: 긴급 청산 시 실제 시장가 재조회 (잘못된 폴백 가격 방지)
             try:
                 # 실제 거래소에서 현재가 조회
@@ -1770,7 +1937,15 @@ class ImprovedDCAPositionManager:
                 self.logger.info(f"🔄 실제 포지션 기준 청산: {position.symbol} - {total_quantity}")
                 
             except Exception as e:
-                self.logger.error(f"실제 포지션 조회 실패: {position.symbol} - {e}")
+                if "apiKey" in str(e):
+                    self.logger.error(f"실제 포지션 조회 실패 - API 키 오류: {position.symbol} - {e}")
+                    # 🔧 수정: API 키 오류 시에도 백업 데이터로 청산 시도
+                    self.logger.warning(f"⚠️ API 키 문제로 백업 데이터 사용하여 청산 시도: {position.symbol}")
+                    # 메인 전략에 API 재연결 요청
+                    if hasattr(self.strategy, '_request_exchange_reconnect'):
+                        self.strategy._request_exchange_reconnect = True
+                else:
+                    self.logger.error(f"실제 포지션 조회 실패: {position.symbol} - {e}")
                 # 백업: DCA 기록 total_quantity 사용 (entries 합계 대신)
                 total_quantity = position.total_quantity
                 if total_quantity <= 0:
@@ -1859,6 +2034,10 @@ class ImprovedDCAPositionManager:
             # 트레일링 스톱
             elif 'trailing' in reason_lower:
                 return "📉", "트레일링 스톱 청산 완료", f"고점 대비 5% 하락 감지"
+            
+            # 시간 기반 자동 청산
+            elif 'time_based' in reason_lower:
+                return "⏰", "시간 기반 청산 완료", f"2시간+ 보유 후 0~5% 수익구간 청산"
             
             # 기타 (기존 긴급청산)
             else:
@@ -2131,6 +2310,30 @@ class ImprovedDCAPositionManager:
             if not self.exchange:
                 return {'success': False, 'error': 'Exchange not available'}
             
+            # 🔧 디버깅: Exchange 객체 상태 확인
+            self.logger.debug(f"🔍 Exchange 상태 확인: {symbol} {side} {quantity}")
+            self.logger.debug(f"🔍 Exchange type: {type(self.exchange).__name__}")
+            self.logger.debug(f"🔍 Has apiKey attr: {hasattr(self.exchange, 'apiKey')}")
+            if hasattr(self.exchange, 'apiKey'):
+                api_key_status = "present" if self.exchange.apiKey else "empty"
+                api_key_length = len(self.exchange.apiKey) if self.exchange.apiKey else 0
+                self.logger.debug(f"🔍 API Key status: {api_key_status} (length: {api_key_length})")
+            
+            # 🔧 수정: API 키 검증 로직 개선 - 실제 거래 가능 여부 확인
+            try:
+                # 간단한 API 호출로 연결 상태 확인 (실제 거래 가능성 검증)
+                test_ticker = self.exchange.fetch_ticker(symbol if '/USDT:USDT' in symbol else f"{symbol.replace('/USDT', '')}/USDT:USDT")
+                self.logger.debug(f"🔍 API 연결 테스트 성공: {symbol}")
+            except Exception as api_test_error:
+                if "apiKey" in str(api_test_error):
+                    self.logger.error(f"❌ API 키 문제 확인됨: {symbol} {side} {quantity} - {api_test_error}")
+                    return {'success': False, 'error': f'API key issue: {str(api_test_error)}', 'silent': False}
+                else:
+                    # API 키 문제가 아닌 다른 오류는 무시하고 계속 진행
+                    self.logger.debug(f"🔍 API 테스트 실패 (키 문제 아님): {api_test_error}")
+            
+            # 🔧 기존 단순한 API 키 체크는 제거 - 실제 호출에서 오류 발생시 처리
+            
             # 🔧 심볼 변환 (이미 변환된 심볼일 수도 있으므로 안전하게 처리)
             if '/USDT:USDT' not in symbol:
                 converted_symbol = self._convert_to_binance_futures_symbol(symbol)
@@ -2187,8 +2390,16 @@ class ImprovedDCAPositionManager:
                 self.logger.error(f"🚨 Rate Limit 초과 - 시장가 주문 실패: {symbol} {side} {quantity} - {e}")
                 return {'success': False, 'error': f'Rate limit exceeded: {str(e)}'}
             except Exception as e:
-                # 418 에러 등 기타 API 에러 처리
-                if "418" in str(e) or "too many requests" in str(e).lower():
+                error_str = str(e).lower()
+                # 🔧 API 키 관련 오류 처리 강화
+                if "apikey" in error_str or "api key" in error_str or "credential" in error_str:
+                    self.logger.error(f"🚨 API 키 문제로 시장가 주문 실패: {symbol} {side} {quantity} - {e}")
+                    # Exchange 재연결 요청
+                    if self.strategy and hasattr(self.strategy, '_request_exchange_reconnect'):
+                        self.strategy._request_exchange_reconnect = True
+                        self.logger.info(f"📨 메인 전략에 Exchange 재연결 요청 전송 (시장가 주문)")
+                    return {'success': False, 'error': f'API key error: {str(e)}'}
+                elif "418" in str(e) or "too many requests" in error_str:
                     self.logger.error(f"🚨 API 과부하 - 시장가 주문 실패: {symbol} {side} {quantity} - {e}")
                     # Rate Limit 상태 플래그 설정 (있는 경우)
                     if hasattr(self.strategy, '_api_rate_limited'):
@@ -2297,6 +2508,11 @@ class ImprovedDCAPositionManager:
             if not self.exchange:
                 return {'success': False, 'error': 'Exchange not available'}
             
+            # 🔧 Exchange 연결 상태 검증
+            if not self._verify_exchange_connection():
+                self.logger.error(f"❌ Exchange 연결 실패로 지정가 주문 실패: {symbol} {side} {quantity} @ ${price:.6f}")
+                return {'success': False, 'error': 'Exchange connection failed', 'silent': False}
+            
             # 🔧 심볼 변환 (이미 변환된 심볼일 수도 있으므로 안전하게 처리)
             if '/USDT:USDT' not in symbol:
                 converted_symbol = self._convert_to_binance_futures_symbol(symbol)
@@ -2330,13 +2546,20 @@ class ImprovedDCAPositionManager:
                     self.logger.error(f"지정가 주문 타입 변환 실패: ticker_last={ticker.get('last')} ({type(ticker.get('last'))}), price={price} ({type(price)}), quantity={quantity} ({type(quantity)}) - {price_convert_error}")
                     return {'success': False, 'error': f'Price type conversion failed: {price_convert_error}'}
                 
-                # 매수 지정가 주문: 지정가가 현재가보다 높으면 즉시 체결되므로 차단
-                if side.lower() == 'buy' and price >= current_price:
-                    self.logger.warning(f"🚨 지정가 주문 차단: {symbol} 매수 지정가(${price:.6f}) ≥ 현재가(${current_price:.6f})")
-                    return {'success': False, 'error': f'Buy limit price {price:.6f} >= current price {current_price:.6f}'}
+                # DCA 매수 지정가 주문 안전장치 (하락 매수용)
+                if side.lower() == 'buy':
+                    # DCA 하락 매수: 지정가가 현재가보다 낮아야 정상
+                    if price >= current_price:
+                        self.logger.warning(f"⚠️ DCA 하락매수 확인: {symbol} 매수 지정가(${price:.6f}) ≥ 현재가(${current_price:.6f})")
+                        # DCA 매수는 즉시 체결되더라도 허용 (하락 상황에서 유리한 진입)
+                    
+                    # 너무 낮은 가격 체크 (현재가의 50% 이하)
+                    if price < current_price * 0.5:
+                        self.logger.warning(f"🚨 지정가 주문 차단: {symbol} 매수 지정가(${price:.6f}) < 현재가의 50%(${current_price*0.5:.6f})")
+                        return {'success': False, 'error': f'Buy limit price too low: {price:.6f} < 50% of current price'}
                 
                 # 매도 지정가 주문: 지정가가 현재가보다 낮으면 즉시 체결되므로 차단  
-                if side.lower() == 'sell' and price <= current_price:
+                elif side.lower() == 'sell' and price <= current_price:
                     self.logger.warning(f"🚨 지정가 주문 차단: {symbol} 매도 지정가(${price:.6f}) ≤ 현재가(${current_price:.6f})")
                     return {'success': False, 'error': f'Sell limit price {price:.6f} <= current price {current_price:.6f}'}
                     
@@ -2344,12 +2567,17 @@ class ImprovedDCAPositionManager:
                 self.logger.warning(f"현재가 비교 실패 - 주문 계속 진행: {symbol} - {e}")
             
             # 지정가 주문 실행
+            self.logger.info(f"🔧 지정가 주문 실행 시도: {symbol} {side} {abs(quantity)} @ ${price:.6f}")
+            self.logger.info(f"🔧 Exchange 정보: {type(self.exchange).__name__}, apiKey 존재: {bool(getattr(self.exchange, 'apiKey', None))}")
+            
             order = self.exchange.create_limit_order(
                 symbol=symbol,
                 side=side,
                 amount=abs(quantity),
                 price=price
             )
+            
+            self.logger.info(f"🔧 지정가 주문 응답: {order}")
             
             if order and order.get('id'):
                 self.logger.info(f"지정가 주문 성공: {symbol} {side} {quantity} @ ${price:.4f} - ID: {order['id']}")
@@ -2367,14 +2595,26 @@ class ImprovedDCAPositionManager:
                 return {'success': False, 'error': 'Limit order creation failed'}
                 
         except Exception as e:
-            self.logger.error(f"지정가 주문 실행 실패: {symbol} {side} {quantity} @ ${price:.4f} - {e}")
-            return {'success': False, 'error': str(e)}
+            error_str = str(e).lower()
+            # 🔧 API 키 관련 오류 처리 강화
+            if "apikey" in error_str or "api key" in error_str or "credential" in error_str:
+                self.logger.error(f"🚨 API 키 문제로 지정가 주문 실패: {symbol} {side} {quantity} @ ${price:.4f} - {e}")
+                # Exchange 재연결 요청
+                if self.strategy and hasattr(self.strategy, '_request_exchange_reconnect'):
+                    self.strategy._request_exchange_reconnect = True
+                    self.logger.info(f"📨 메인 전략에 Exchange 재연결 요청 전송 (지정가 주문)")
+                return {'success': False, 'error': f'API key error: {str(e)}'}
+            else:
+                self.logger.error(f"지정가 주문 실행 실패: {symbol} {side} {quantity} @ ${price:.4f} - {e}")
+                return {'success': False, 'error': str(e)}
 
     def _cancel_pending_orders(self, symbol: str) -> Dict[str, Any]:
         """해당 심볼의 미체결 지정가 주문 취소 - Rate Limit 대응 강화"""
         try:
             if not self.exchange:
                 return {'success': False, 'error': 'Exchange not available'}
+            
+            # 🔧 API 키 검증 로직 개선 - 실제 API 호출에서 오류 처리
             
             # 🔧 심볼 변환 (이미 변환된 심볼일 수도 있으므로 안전하게 처리)
             if '/USDT:USDT' not in symbol:
@@ -2396,8 +2636,15 @@ class ImprovedDCAPositionManager:
                 self.logger.error(f"🚨 Rate Limit 초과 - 주문 조회 실패: {symbol} - {e}")
                 return {'success': False, 'error': f'Rate limit exceeded: {str(e)}'}
             except Exception as e:
-                # 418 에러 등 기타 API 에러 처리
-                if "418" in str(e) or "too many requests" in str(e).lower():
+                error_str = str(e).lower()
+                # 🔧 API 키 관련 오류 처리 강화
+                if "apikey" in error_str or "api key" in error_str or "credential" in error_str:
+                    self.logger.error(f"🚨 API 키 문제로 주문 조회 실패: {symbol} - {e}")
+                    if self.strategy and hasattr(self.strategy, '_request_exchange_reconnect'):
+                        self.strategy._request_exchange_reconnect = True
+                        self.logger.info(f"📨 메인 전략에 Exchange 재연결 요청 전송 (주문 조회)")
+                    return {'success': False, 'error': f'API key error: {str(e)}'}
+                elif "418" in str(e) or "too many requests" in error_str:
                     self.logger.error(f"🚨 API 과부하 - 주문 조회 실패: {symbol} - {e}")
                     return {'success': False, 'error': f'API overload: {str(e)}'}
                 else:
@@ -2430,8 +2677,15 @@ class ImprovedDCAPositionManager:
                     self.logger.error(f"🚨 Rate Limit 초과 - 주문 취소 실패: {symbol} - ID: {order['id']} - {e}")
                     break  # Rate Limit 발생시 즉시 중단
                 except Exception as e:
-                    # 418 에러 등 기타 API 에러 처리
-                    if "418" in str(e) or "too many requests" in str(e).lower():
+                    error_str = str(e).lower()
+                    # 🔧 API 키 관련 오류 처리 강화
+                    if "apikey" in error_str or "api key" in error_str or "credential" in error_str:
+                        self.logger.error(f"🚨 API 키 문제로 주문 취소 실패: {symbol} - ID: {order['id']} - {e}")
+                        if self.strategy and hasattr(self.strategy, '_request_exchange_reconnect'):
+                            self.strategy._request_exchange_reconnect = True
+                            self.logger.info(f"📨 메인 전략에 Exchange 재연결 요청 전송 (주문 취소)")
+                        break  # API 키 문제시 즉시 중단
+                    elif "418" in str(e) or "too many requests" in error_str:
                         self.logger.error(f"🚨 API 과부하 - 주문 취소 실패: {symbol} - ID: {order['id']} - {e}")
                         break  # API 과부하시 즉시 중단
                     else:
@@ -2445,12 +2699,20 @@ class ImprovedDCAPositionManager:
             }
                 
         except Exception as e:
-            # 418 에러 등 전체적인 API 에러 처리
-            if "418" in str(e) or "too many requests" in str(e).lower():
+            error_str = str(e).lower()
+            # 🔧 API 키 관련 오류 처리 강화
+            if "apikey" in error_str or "api key" in error_str or "credential" in error_str:
+                self.logger.error(f"🚨 API 키 문제로 인한 미체결 주문 취소 실패: {symbol} - {e}")
+                if self.strategy and hasattr(self.strategy, '_request_exchange_reconnect'):
+                    self.strategy._request_exchange_reconnect = True
+                    self.logger.info(f"📨 메인 전략에 Exchange 재연결 요청 전송 (전체 주문 취소)")
+                return {'success': False, 'error': f'API key error: {str(e)}'}
+            elif "418" in str(e) or "too many requests" in error_str:
                 self.logger.error(f"🚨 API 과부하로 인한 미체결 주문 취소 실패: {symbol} - {e}")
+                return {'success': False, 'error': f'API overload: {str(e)}'}
             else:
                 self.logger.error(f"미체결 주문 취소 실패: {symbol} - {e}")
-            return {'success': False, 'error': str(e)}
+                return {'success': False, 'error': str(e)}
 
     def get_pending_orders(self, symbol: str) -> List[Dict[str, Any]]:
         """해당 심볼의 미체결 지정가 주문 조회 (메인 전략 호환용)"""
@@ -3055,6 +3317,207 @@ class ImprovedDCAPositionManager:
             }
     
     # ========================================================================================
+    # BB80 > BB600 수동청산 조건 구현 (새로운 1순위 청산 조건)
+    # ========================================================================================
+    
+    def _check_bb80_bb600_manual_exit(self, symbol: str, current_price: float, profit_pct: float) -> Optional[Dict[str, Any]]:
+        """15분봉 BB80 > BB600 조건 + 원금수익률 5% 이상시 수동청산 전환 체크"""
+        try:
+            # 원금수익률 5% 이상 조건 확인
+            if profit_pct < 0.05:  # 5% 미만이면 조건 미충족
+                return None
+                
+            # 15분봉 데이터 조회
+            try:
+                ohlcv = self.exchange.fetch_ohlcv(symbol, '15m', limit=600)
+                if len(ohlcv) < 600:
+                    self.logger.warning(f"⚠️ {symbol} 15분봉 데이터 부족: {len(ohlcv)}개")
+                    return None
+                    
+                # DataFrame 변환
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df.set_index('timestamp', inplace=True)
+                
+            except Exception as e:
+                self.logger.error(f"❌ {symbol} 15분봉 데이터 조회 실패: {e}")
+                return None
+            
+            # BB80 (80기간 볼린저밴드) 계산
+            bb80_period = 80
+            bb80_upper = self._calculate_bollinger_band_upper(df['close'], bb80_period, std_dev=2.0)
+            
+            # BB600 (600기간 볼린저밴드) 계산  
+            bb600_period = 600
+            bb600_upper = self._calculate_bollinger_band_upper(df['close'], bb600_period, std_dev=2.0)
+            
+            # 현재 시점의 BB 값들
+            current_bb80_upper = bb80_upper.iloc[-1] if len(bb80_upper) > 0 else None
+            current_bb600_upper = bb600_upper.iloc[-1] if len(bb600_upper) > 0 else None
+            
+            if current_bb80_upper is None or current_bb600_upper is None:
+                self.logger.warning(f"⚠️ {symbol} BB 계산 실패: BB80={current_bb80_upper}, BB600={current_bb600_upper}")
+                return None
+            
+            # BB80 > BB600 조건 확인 (의미있는 차이 0.1% 이상 필요)
+            if current_bb80_upper > current_bb600_upper:
+                # 차이 계산 (백분율)
+                bb_diff_pct = ((current_bb80_upper - current_bb600_upper) / current_bb600_upper) * 100
+                
+                # 최소 임계값 1.0% 이상일 때만 신호 발생 (차트/API 데이터 차이 고려)
+                if bb_diff_pct >= 1.0:
+                    self.logger.info(f"🎯 {symbol} BB80>BB600 수동청산 조건 충족:")
+                    self.logger.info(f"   원금수익률: {profit_pct*100:.2f}% (≥5%)")
+                    self.logger.info(f"   BB80 상단: ${current_bb80_upper:.6f}")
+                    self.logger.info(f"   BB600 상단: ${current_bb600_upper:.6f}")
+                    self.logger.info(f"   BB 차이: {bb_diff_pct:.2f}% (≥1.0%)")
+                    self.logger.info(f"   현재가: ${current_price:.6f}")
+                    
+                    return {
+                        'trigger_type': 'bb80_bb600_manual_exit',
+                        'priority': 1,  # 최고 우선순위
+                        'profit_pct': profit_pct * 100,
+                        'bb80_upper': current_bb80_upper,
+                        'bb600_upper': current_bb600_upper,
+                        'bb_diff_pct': bb_diff_pct,
+                        'current_price': current_price,
+                        'reason': f'BB80({current_bb80_upper:.6f}) > BB600({current_bb600_upper:.6f}) 차이{bb_diff_pct:.2f}% + 원금수익률 {profit_pct*100:.2f}%'
+                    }
+                else:
+                    # 차이가 너무 미세한 경우 로그만 출력
+                    self.logger.debug(f"🔍 {symbol} BB80>BB600 차이 미세: {bb_diff_pct:.2f}% (1.0% 미만, 신호 무시)")
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"❌ BB80/BB600 수동청산 조건 확인 실패 {symbol}: {e}")
+            return None
+    
+    def _check_profit_protection_exit(self, symbol: str, current_price: float, profit_pct: float, position) -> Optional[Dict[str, Any]]:
+        """최대 수익률 6-10% 구간에서 5% 보호 청산 조건 확인"""
+        try:
+            # 최대 수익률이 6% 이상 도달했는지 확인
+            if position.max_profit_pct < 0.06:  # 6% 미만이면 보호 조건 미충족
+                return None
+            
+            # 최대 수익률이 6% 이상이면 보호 청산 대상 (상한 없음)
+            # 10% 초과해도 5% 보호 원칙은 동일하게 적용
+            
+            # 현재 수익률이 5% 아래로 떨어졌는지 확인
+            if profit_pct >= 0.05:  # 현재 수익률이 5% 이상이면 아직 보호 불필요
+                return None
+            
+            # 보호 청산 조건 충족
+            protection_trigger_pct = 0.05  # 5% 보호선
+            max_profit_achieved = position.max_profit_pct * 100
+            current_profit = profit_pct * 100
+            protection_line = protection_trigger_pct * 100
+            
+            self.logger.info(f"💰 {symbol} 수익 보호 청산 조건 분석:")
+            self.logger.info(f"   최대 수익률: {max_profit_achieved:.2f}% (≥6%)")
+            self.logger.info(f"   현재 수익률: {current_profit:.2f}%")
+            self.logger.info(f"   보호선: {protection_line:.2f}%")
+            self.logger.info(f"   보호 조건: 최대수익률 6% 이상 달성 후 5% 아래 하락시 전량청산")
+            
+            return {
+                'trigger_type': 'profit_protection_exit',
+                'priority': 1.5,  # BB80>BB600 다음 순위
+                'max_profit_pct': max_profit_achieved,
+                'current_profit_pct': current_profit,
+                'protection_line_pct': protection_line,
+                'protection_price': position.initial_entry_price * (1 + protection_trigger_pct),
+                'current_price': current_price,
+                'exit_ratio': 1.0,  # 전량 청산
+                'reason': f'최대수익률 {max_profit_achieved:.2f}% 달성 후 {protection_line:.0f}% 보호선 하회'
+            }
+            
+        except Exception as e:
+            self.logger.error(f"❌ 수익 보호 청산 조건 확인 실패 {symbol}: {e}")
+            return None
+    
+    def _check_time_based_exit(self, position: DCAPosition, current_price: float, profit_pct: float) -> Optional[Dict[str, Any]]:
+        """시간 기반 자동 청산 조건 확인 - 2시간 이상 보유하고 원금 수익률이 0~5% 이하인 경우"""
+        try:
+            # 이미 시간 기반 청산이 완료된 경우 스킵
+            if position.time_based_exit_done:
+                return None
+            
+            # 포지션 생성 시간 파싱
+            try:
+                created_time = datetime.fromisoformat(position.created_at.replace('Z', '+00:00'))
+            except (ValueError, AttributeError) as e:
+                self.logger.warning(f"⚠️ {position.symbol} 포지션 생성 시간 파싱 실패: {position.created_at}, {e}")
+                # 백업: 한국 시간 형식으로 시도
+                try:
+                    created_time = datetime.strptime(position.created_at, '%Y-%m-%d %H:%M:%S')
+                    # 한국시간으로 가정하고 UTC로 변환
+                    created_time = created_time.replace(tzinfo=timezone(timedelta(hours=9)))
+                except ValueError:
+                    self.logger.error(f"❌ {position.symbol} 시간 파싱 완전 실패, 시간 기반 청산 스킵")
+                    return None
+            
+            # 현재 시간 (UTC)
+            current_time = datetime.now(timezone.utc)
+            
+            # 보유 시간 계산 (시간 단위)
+            hold_duration = current_time - created_time
+            hold_hours = hold_duration.total_seconds() / 3600
+            
+            # 2시간 이상 보유 조건 확인
+            if hold_hours < 2.0:
+                return None
+            
+            # 원금 수익률이 0~5% 이하 조건 확인 (수정된 조건)
+            if profit_pct < 0 or profit_pct > 0.05:  # 0% 미만이거나 5% 초과시 조건 미충족
+                return None
+            
+            # 시간 기반 청산 조건 충족
+            self.logger.info(f"⏰ {position.symbol} 시간 기반 청산 조건 분석:")
+            self.logger.info(f"   보유 시간: {hold_hours:.1f}시간 (≥2시간)")
+            self.logger.info(f"   현재 수익률: {profit_pct*100:.2f}% (0~5% 범위)")
+            self.logger.info(f"   청산 조건: 2시간 이상 보유 + 원금수익률 0~5% 이하")
+            
+            return {
+                'trigger_type': 'time_based_exit',
+                'priority': 2,  # 손절 다음 우선순위
+                'hold_hours': hold_hours,
+                'current_profit_pct': profit_pct * 100,
+                'current_price': current_price,
+                'position_age': f"{int(hold_hours)}시간 {int((hold_hours % 1) * 60)}분",
+                'exit_ratio': 1.0,  # 전량 청산
+                'reason': f'{hold_hours:.1f}시간 보유, 수익률 {profit_pct*100:.2f}% (2시간+0~5% 조건)'
+            }
+            
+        except Exception as e:
+            self.logger.error(f"❌ 시간 기반 청산 조건 확인 실패 {position.symbol}: {e}")
+            return None
+    
+    def _calculate_bollinger_band_upper(self, close_prices: pd.Series, period: int, std_dev: float = 2.0) -> pd.Series:
+        """볼린저밴드 상단선 계산"""
+        try:
+            if len(close_prices) < period:
+                # 데이터 부족시 현재가 기준으로 상단선 추정
+                current_price = close_prices.iloc[-1]
+                return pd.Series([current_price * 1.02] * len(close_prices), index=close_prices.index)
+            
+            # 이동평균선 계산
+            sma = close_prices.rolling(window=period).mean()
+            
+            # 표준편차 계산
+            std = close_prices.rolling(window=period).std()
+            
+            # 볼린저밴드 상단선 = 이동평균선 + (표준편차 * 계수)
+            bb_upper = sma + (std * std_dev)
+            
+            return bb_upper
+            
+        except Exception as e:
+            self.logger.error(f"볼린저밴드 계산 실패: {e}")
+            # 에러 시 현재가 기준 기본값 반환
+            current_price = close_prices.iloc[-1]
+            return pd.Series([current_price * 1.02] * len(close_prices), index=close_prices.index)
+
+    # ========================================================================================
     # 새로운 4가지 청산 방식 구현
     # ========================================================================================
     
@@ -3209,7 +3672,7 @@ class ImprovedDCAPositionManager:
             return None
     
     def check_bb600_exit_signal(self, symbol: str, current_price: float, position: DCAPosition) -> Optional[Dict[str, Any]]:
-        """2. BB600 트레일링 스탑: 3분봉/5분봉/15분봉/30분봉 캔들 고점이 BB600 상단선 돌파시 50% 익절 + 트레일링 스탑 활성화"""
+        """2. BB600 트레일링 스탑: 15분봉/30분봉 캔들 고점이 BB600 상단선 돌파시 50% 익절 + 트레일링 스탑 활성화"""
         try:
             # 이미 BB600 50% 청산을 했다면 트레일링 스탑만 체크
             if position.bb600_exit_done and not position.trailing_stop_active:
@@ -3219,28 +3682,10 @@ class ImprovedDCAPositionManager:
             if position.trailing_stop_active:
                 return self._check_trailing_stop(symbol, current_price, position)
 
-            # 🚀 10% 이상 수익 달성시 자동 50% 익절 (BB600 기술적 조건 무관)
+            # BB600 돌파 체크 (15분봉, 30분봉만)
             current_profit_pct = (current_price - position.average_price) / position.average_price
-            if current_profit_pct >= 0.10 and not position.bb600_exit_done:
-                self.logger.info(f"💰 10% 이상 수익 달성 - 자동 50% 익절: {symbol} (수익률: {current_profit_pct*100:.1f}%)")
-                
-                # 트레일링 스탑 활성화
-                position.trailing_stop_active = True
-                position.trailing_stop_high = current_price
-                position.last_update = get_korea_time().isoformat()
-                self.save_data()
-                
-                return {
-                    'exit_type': ExitType.BB600_PARTIAL_EXIT.value,
-                    'exit_ratio': 0.5,  # 50% 청산
-                    'timeframe': 'profit_threshold',
-                    'current_price': current_price,
-                    'current_profit_pct': current_profit_pct * 100,
-                    'trigger_info': f"10% 이상 수익 달성 자동 50% 익절 ({current_profit_pct*100:.1f}%)"
-                }
-
-            # BB600 돌파 체크 (3분봉, 5분봉, 15분봉, 30분봉)
-            for timeframe in ['3m', '5m', '15m', '30m']:
+            
+            for timeframe in ['15m', '30m']:
                 try:
                     # 데이터 조회
                     ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=650)  # BB600 계산을 위해 충분한 데이터
@@ -3481,6 +3926,54 @@ class ImprovedDCAPositionManager:
             self.logger.error(f"약수익 보호 확인 실패 {symbol}: {e}")
             return None
     
+    def check_10_percent_profit_exit(self, symbol: str, current_price: float, position: DCAPosition) -> Optional[Dict[str, Any]]:
+        """2. 10% 수익률 달성시 50% 익절청산 + 트레일링 스탑 활성화"""
+        try:
+            # 이미 10% 수익 청산을 했다면 스킵
+            if hasattr(position, 'profit_10_exit_done') and position.profit_10_exit_done:
+                return None
+                
+            # 현재 수익률 계산 (원금 기준)
+            current_profit_pct = (current_price - position.average_price) / position.average_price
+            
+            # 10% 수익률 달성시 50% 익절
+            if current_profit_pct >= 0.10:
+                self.logger.info(f"💰 10% 원금 수익률 달성 - 50% 익절청산: {symbol} (수익률: {current_profit_pct*100:.1f}%)")
+                
+                # 10% 수익 청산 마킹
+                position.profit_10_exit_done = True
+                
+                # 트레일링 스탑 활성화
+                position.trailing_stop_active = True
+                position.trailing_stop_high = current_price
+                position.last_update = get_korea_time().isoformat()
+                self.save_data()
+                
+                # 텔레그램 알림
+                if self.telegram_bot:
+                    clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
+                    message = (f"💰 [10% 수익률 익절] {clean_symbol}\n"
+                             f"진입가: ${position.average_price:.6f}\n"
+                             f"현재가: ${current_price:.6f}\n"
+                             f"수익률: {current_profit_pct*100:.1f}%\n"
+                             f"🔄 50% 익절 + 트레일링 스탑 시작")
+                    self.telegram_bot.send_message(message)
+                
+                return {
+                    'exit_type': 'profit_10_percent_exit',
+                    'exit_ratio': 0.5,  # 50% 청산
+                    'current_price': current_price,
+                    'current_profit_pct': current_profit_pct * 100,
+                    'trigger_info': f"10% 원금 수익률 달성 50% 익절 ({current_profit_pct*100:.1f}%)",
+                    'trailing_stop_activated': True
+                }
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"10% 수익률 익절 확인 실패 {symbol}: {e}")
+            return None
+    
     def check_weak_rise_dump_protection_exit(self, symbol: str, current_price: float, position: DCAPosition) -> Optional[Dict[str, Any]]:
         """5. 약상승후 급락 리스크 회피: 원금기준 최대수익률 2%이상 → 손실부근 하락 + 5분봉 5봉이내 SuperTrend(10-2) 청산신호"""
         try:
@@ -3551,8 +4044,133 @@ class ImprovedDCAPositionManager:
             self.logger.error(f"약상승후 급락 리스크 회피 확인 실패 {symbol}: {e}")
             return None
     
+    def check_bb80_bb600_reversal_exit(self, symbol: str, current_price: float, position: DCAPosition) -> Optional[Dict[str, Any]]:
+        """6. BB80-BB600 역전 기반 전량청산: BB80상단>BB600상단 & MA5-BB600상단 이격도≥10% & 15분봉 시가>MA5 & 1분봉 10봉이내 MA5-BB80 데드크로스"""
+        try:
+            # WebSocket 데이터 제공자 확인
+            if not hasattr(self, 'strategy') or not hasattr(self.strategy, 'ws_provider') or not self.strategy.ws_provider:
+                return None
+                
+            ws_provider = self.strategy.ws_provider
+            
+            # 15분봉 데이터 가져오기 (MA5, BB80, BB600 계산용)
+            data_15m = ws_provider.get_ohlcv(symbol, '15m', 120)
+            if not data_15m or len(data_15m) < 100:
+                return None
+                
+            # 1분봉 데이터 가져오기 (MA5-BB80 데드크로스 확인용)
+            data_1m = ws_provider.get_ohlcv(symbol, '1m', 20)
+            if not data_1m or len(data_1m) < 15:
+                return None
+                
+            # 15분봉 DataFrame 변환
+            df_15m = pd.DataFrame(data_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df_15m = df_15m.astype({
+                'open': 'float64', 'high': 'float64', 'low': 'float64', 'close': 'float64', 'volume': 'float64'
+            })
+            
+            # 1분봉 DataFrame 변환
+            df_1m = pd.DataFrame(data_1m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df_1m = df_1m.astype({
+                'open': 'float64', 'high': 'float64', 'low': 'float64', 'close': 'float64', 'volume': 'float64'
+            })
+            
+            # 15분봉 기술적 지표 계산
+            df_15m['MA5'] = df_15m['close'].rolling(window=5).mean()
+            
+            # BB80 (80일 볼린저밴드)
+            bb80_mean = df_15m['close'].rolling(window=80).mean()
+            bb80_std = df_15m['close'].rolling(window=80).std()
+            df_15m['BB80_upper'] = bb80_mean + (bb80_std * 2.0)
+            df_15m['BB80_lower'] = bb80_mean - (bb80_std * 2.0)
+            
+            # BB600 (600일 볼린저밴드)
+            bb600_mean = df_15m['close'].rolling(window=100).mean()  # 15분봉에서는 100개로 제한
+            bb600_std = df_15m['close'].rolling(window=100).std()
+            df_15m['BB600_upper'] = bb600_mean + (bb600_std * 2.0)
+            df_15m['BB600_lower'] = bb600_mean - (bb600_std * 2.0)
+            
+            # 1분봉 기술적 지표 계산
+            df_1m['MA5'] = df_1m['close'].rolling(window=5).mean()
+            bb80_mean_1m = df_1m['close'].rolling(window=15).mean()  # 1분봉에서는 15개로 제한
+            bb80_std_1m = df_1m['close'].rolling(window=15).std()
+            df_1m['BB80_upper'] = bb80_mean_1m + (bb80_std_1m * 2.0)
+            
+            # 최신 15분봉 데이터
+            latest_15m = df_15m.iloc[-1]
+            bb80_upper_15m = latest_15m['BB80_upper']
+            bb600_upper_15m = latest_15m['BB600_upper']
+            ma5_15m = latest_15m['MA5']
+            open_15m = latest_15m['open']
+            
+            # 조건 1: BB80 상단선 > BB600 상단선
+            condition1 = bb80_upper_15m > bb600_upper_15m
+            
+            # 조건 2: MA5와 BB600 상단선 이격도가 10% 이상
+            if bb600_upper_15m > 0:
+                ma5_bb600_gap_pct = abs((ma5_15m - bb600_upper_15m) / bb600_upper_15m) * 100
+                condition2 = ma5_bb600_gap_pct >= 10.0
+            else:
+                condition2 = False
+                
+            # 조건 3: 15분봉상 시가 > MA5
+            condition3 = open_15m > ma5_15m
+            
+            # 조건 4: 1분봉상 10봉 이내 MA5-BB80 데드크로스
+            condition4 = False
+            deadcross_candle = None
+            
+            if len(df_1m) >= 10:
+                for i in range(min(10, len(df_1m) - 1)):
+                    current_idx = len(df_1m) - 1 - i
+                    prev_idx = current_idx - 1
+                    
+                    if (current_idx >= 0 and prev_idx >= 0 and 
+                        not pd.isna(df_1m.iloc[current_idx]['MA5']) and 
+                        not pd.isna(df_1m.iloc[current_idx]['BB80_upper']) and
+                        not pd.isna(df_1m.iloc[prev_idx]['MA5']) and 
+                        not pd.isna(df_1m.iloc[prev_idx]['BB80_upper'])):
+                        
+                        # 이전: MA5 > BB80상단, 현재: MA5 <= BB80상단 (데드크로스)
+                        prev_above = df_1m.iloc[prev_idx]['MA5'] > df_1m.iloc[prev_idx]['BB80_upper']
+                        current_below = df_1m.iloc[current_idx]['MA5'] <= df_1m.iloc[current_idx]['BB80_upper']
+                        
+                        if prev_above and current_below:
+                            condition4 = True
+                            deadcross_candle = i + 1
+                            break
+            
+            # 디버그 로그
+            self.logger.debug(f"BB80-BB600 역전 청산 체크 {symbol}: "
+                            f"BB80상단({bb80_upper_15m:.4f}) > BB600상단({bb600_upper_15m:.4f}): {condition1}, "
+                            f"MA5-BB600 이격도 {ma5_bb600_gap_pct:.1f}%≥10%: {condition2}, "
+                            f"시가({open_15m:.4f}) > MA5({ma5_15m:.4f}): {condition3}, "
+                            f"1분봉 MA5-BB80 데드크로스(10봉이내): {condition4}")
+            
+            # 모든 조건 만족시 전량청산 신호
+            if condition1 and condition2 and condition3 and condition4:
+                return {
+                    'exit_type': ExitType.BB80_BB600_REVERSAL_EXIT.value,
+                    'exit_ratio': 1.0,  # 전량청산
+                    'current_price': current_price,
+                    'reason': 'BB80-BB600 역전 + MA5-BB600 이격도≥10% + 시가>MA5 + MA5-BB80 데드크로스',
+                    'bb80_upper': bb80_upper_15m,
+                    'bb600_upper': bb600_upper_15m,
+                    'ma5_bb600_gap_pct': ma5_bb600_gap_pct,
+                    'open_15m': open_15m,
+                    'ma5_15m': ma5_15m,
+                    'deadcross_candle': deadcross_candle,
+                    'trigger_info': f"BB80-BB600 역전청산 (BB80상단:{bb80_upper_15m:.4f} > BB600상단:{bb600_upper_15m:.4f}, MA5-BB600 이격:{ma5_bb600_gap_pct:.1f}%, {deadcross_candle}봉전 데드크로스)"
+                }
+                
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"BB80-BB600 역전 청산 확인 실패 {symbol}: {e}")
+            return None
+    
     def check_all_new_exit_signals(self, symbol: str, current_price: float) -> Optional[Dict[str, Any]]:
-        """새로운 5가지 청산 방식 종합 확인 (우선순위 적용)"""
+        """새로운 7가지 청산 방식 종합 확인 (우선순위 적용)"""
         try:
             if symbol not in self.positions:
                 return None
@@ -3561,27 +4179,58 @@ class ImprovedDCAPositionManager:
             if not position.is_active:
                 return None
             
-            # 1순위: SuperTrend 전량청산 (수익률 조건 + SuperTrend 시그널)
-            supertrend_exit = self.check_supertrend_exit_signal(symbol, current_price, position)
-            if supertrend_exit:
-                return supertrend_exit
+            # 🎯 청산 모드 판단: 최초 진입가 기준으로 일반청산 vs 순환매 결정
+            is_profitable = current_price > position.initial_entry_price
+            profit_pct_from_initial = ((current_price - position.initial_entry_price) / position.initial_entry_price) * 100
             
-            # 2순위: BB600 50% 익절 (10% 이상에서 우선 실행)
-            bb600_exit = self.check_bb600_exit_signal(symbol, current_price, position)
-            if bb600_exit:
-                return bb600_exit
-            
-            # 3순위: 약상승후 급락 리스크 회피 (새로운 5번째 청산)
-            weak_rise_dump_exit = self.check_weak_rise_dump_protection_exit(symbol, current_price, position)
-            if weak_rise_dump_exit:
-                return weak_rise_dump_exit
-            
-            # 4순위: 본절보호청산 (트레일링 스톱, 절반하락 보호, 약수익 보호)
-            breakeven_exit = self.check_breakeven_protection_exit(symbol, current_price, position)
-            if breakeven_exit:
-                return breakeven_exit
-            
-            # 5순위: DCA 순환매 일부청산은 기존 시스템 유지
+            if is_profitable:
+                # 최초 진입가 대비 수익 상황 → 일반 청산 모드 적용
+                self.logger.debug(f"💚 일반청산모드: {symbol} - 최초진입가 대비 +{profit_pct_from_initial:.2f}%")
+                
+                # 1순위: SuperTrend 전량청산 (수익률 조건 + SuperTrend 시그널)
+                supertrend_exit = self.check_supertrend_exit_signal(symbol, current_price, position)
+                if supertrend_exit:
+                    return supertrend_exit
+                
+                # 2순위: 10% 수익률 달성시 50% 익절청산
+                profit_partial_exit = self.check_10_percent_profit_exit(symbol, current_price, position)
+                if profit_partial_exit:
+                    return profit_partial_exit
+                
+                # 3순위: BB600 50% 익절 (기술적 조건)
+                bb600_exit = self.check_bb600_exit_signal(symbol, current_price, position)
+                if bb600_exit:
+                    return bb600_exit
+                
+                # 4순위: 약상승후 급락 리스크 회피
+                weak_rise_dump_exit = self.check_weak_rise_dump_protection_exit(symbol, current_price, position)
+                if weak_rise_dump_exit:
+                    return weak_rise_dump_exit
+                
+                # 5순위: 브레이크이븐 보호청산 (트레일링 스톱, 절반하락 보호, 약수익 보호)
+                breakeven_exit = self.check_breakeven_protection_exit(symbol, current_price, position)
+                if breakeven_exit:
+                    return breakeven_exit
+                
+                # 6순위: BB80-BB600 역전 기반 전량청산 (수익/손실 구분 없이 적용)
+                bb80_bb600_reversal_exit = self.check_bb80_bb600_reversal_exit(symbol, current_price, position)
+                if bb80_bb600_reversal_exit:
+                    return bb80_bb600_reversal_exit
+                
+            else:
+                # 최초 진입가 대비 손실 상황 → 순환매 모드 (카운트 무관)
+                self.logger.debug(f"🔄 순환매모드: {symbol} - 최초진입가 대비 {profit_pct_from_initial:.2f}%")
+                
+                # 우선: BB80-BB600 역전 기반 전량청산 (손실 상황에서도 적용)
+                bb80_bb600_reversal_exit = self.check_bb80_bb600_reversal_exit(symbol, current_price, position)
+                if bb80_bb600_reversal_exit:
+                    return bb80_bb600_reversal_exit
+                
+                # 순환매 3회 제한은 참고용으로만 사용 (실제 모드 전환과는 무관)
+                if position.cyclic_count < position.max_cyclic_count:
+                    # 7순위: DCA 순환매 일부청산 (손실 상황에서만 적용)
+                    # 기존 순환매 시스템 호출은 여기서 하지 않고, 별도 메서드에서 처리
+                    pass
             
             return None
             
@@ -3910,11 +4559,12 @@ class ImprovedDCAPositionManager:
                         position.cyclic_count += 1
                         position.last_cyclic_entry = get_korea_time().isoformat()
                         
-                        # 순환매 완료 체크
+                        # 순환매 상태 유지 (카운트와 무관하게 최초진입가 기준으로 청산 모드 결정)
+                        position.cyclic_state = CyclicState.CYCLIC_ACTIVE.value
+                        
+                        # 순환매 3회 제한 로그 (참고용)
                         if position.cyclic_count >= position.max_cyclic_count:
-                            position.cyclic_state = CyclicState.CYCLIC_COMPLETE.value
-                        else:
-                            position.cyclic_state = CyclicState.CYCLIC_ACTIVE.value
+                            self.logger.info(f"📊 순환매 {position.max_cyclic_count}회 달성: {symbol} - 이후 청산은 최초진입가 기준")
                         
                         position.last_update = get_korea_time().isoformat()
                         self.save_data()
@@ -4062,6 +4712,181 @@ class ImprovedDCAPositionManager:
         except Exception as e:
             self.logger.error(f"부분청산 실행 실패 {position.symbol}: {e}")
             return False
+
+    def sync_positions_with_exchange(self, total_balance: float = None) -> Dict[str, Any]:
+        """주기적 포지션 동기화: 거래소 포지션과 DCA 기록 간 불일치 해결"""
+        try:
+            if not self.exchange:
+                return {'synced': 0, 'error': 'Exchange not configured'}
+            
+            self.logger.info("🔄 포지션 동기화 시작...")
+            
+            # 거래소 실제 포지션 조회
+            exchange_positions = self.exchange.fetch_positions()
+            active_exchange_positions = {
+                pos['symbol']: pos for pos in exchange_positions 
+                if pos['size'] > 0 and pos['side'] == 'long'
+            }
+            
+            # DCA 관리 포지션 조회
+            active_dca_positions = {
+                symbol: position for symbol, position in self.positions.items() 
+                if position.is_active
+            }
+            
+            sync_results = {
+                'checked_positions': len(active_dca_positions),
+                'missing_dca_orders': 0,
+                'duplicate_orders_cleaned': 0,
+                'orders_created': 0,
+                'errors': []
+            }
+            
+            # 각 DCA 포지션에 대해 주문 상태 확인
+            for symbol, dca_position in active_dca_positions.items():
+                try:
+                    # 거래소 미체결 주문 조회
+                    open_orders = self.exchange.fetch_open_orders(symbol)
+                    dca_orders = [order for order in open_orders if order['side'] == 'buy']  # DCA는 매수 주문
+                    
+                    # DCA 단계별 주문 상태 분석
+                    expected_orders = self._analyze_expected_dca_orders(dca_position)
+                    actual_orders = {order['price']: order for order in dca_orders}
+                    
+                    # 누락된 DCA 주문 생성
+                    for stage, order_info in expected_orders.items():
+                        if order_info['should_exist'] and order_info['price'] not in actual_orders:
+                            # 누락된 DCA 주문 생성
+                            missing_result = self._create_missing_dca_order(
+                                dca_position, stage, order_info, total_balance
+                            )
+                            if missing_result['success']:
+                                sync_results['orders_created'] += 1
+                                self.logger.info(f"✅ 누락 DCA 주문 생성: {symbol} {stage} @ ${order_info['price']:.4f}")
+                            else:
+                                sync_results['errors'].append(f"{symbol} {stage}: {missing_result['error']}")
+                        
+                    # 중복 주문 정리
+                    duplicate_count = len(dca_orders) - len(expected_orders)
+                    if duplicate_count > 0:
+                        # 중복 주문 취소 로직 (가장 오래된 주문부터)
+                        sorted_orders = sorted(dca_orders, key=lambda x: x['timestamp'])
+                        for i in range(duplicate_count):
+                            try:
+                                self.exchange.cancel_order(sorted_orders[i]['id'], symbol)
+                                sync_results['duplicate_orders_cleaned'] += 1
+                                self.logger.info(f"🗑️ 중복 DCA 주문 취소: {symbol} {sorted_orders[i]['id']}")
+                            except Exception as cancel_error:
+                                sync_results['errors'].append(f"주문 취소 실패 {symbol}: {cancel_error}")
+                    
+                    sync_results['missing_dca_orders'] += len([
+                        order for order in expected_orders.values() 
+                        if order['should_exist'] and order['price'] not in actual_orders
+                    ])
+                    
+                except Exception as pos_error:
+                    self.logger.error(f"포지션 동기화 오류 {symbol}: {pos_error}")
+                    sync_results['errors'].append(f"{symbol}: {str(pos_error)}")
+            
+            # 결과 요약
+            self.logger.info(f"📊 동기화 완료: {sync_results['checked_positions']}개 포지션, "
+                           f"{sync_results['orders_created']}개 주문 생성, "
+                           f"{sync_results['duplicate_orders_cleaned']}개 중복 정리")
+            
+            if sync_results['errors']:
+                self.logger.warning(f"⚠️ 동기화 오류 {len(sync_results['errors'])}건")
+            
+            return sync_results
+            
+        except Exception as e:
+            self.logger.error(f"포지션 동기화 실패: {e}")
+            return {'synced': 0, 'error': str(e)}
+    
+    def _analyze_expected_dca_orders(self, position: DCAPosition) -> Dict[str, Dict]:
+        """DCA 포지션에서 예상되는 지정가 주문 분석"""
+        try:
+            expected = {}
+            
+            # 1차 DCA 주문 체크
+            first_dca_price = position.initial_entry_price * (1 + self.config['first_dca_trigger'])
+            first_dca_exists = any(
+                entry.stage == 'first_dca' and entry.is_active and not entry.is_filled 
+                for entry in position.entries
+            )
+            
+            expected['first_dca'] = {
+                'price': first_dca_price,
+                'should_exist': position.current_stage == 'initial' and not first_dca_exists,
+                'stage': 'first_dca'
+            }
+            
+            # 2차 DCA 주문 체크
+            second_dca_price = position.initial_entry_price * (1 + self.config['second_dca_trigger'])
+            second_dca_exists = any(
+                entry.stage == 'second_dca' and entry.is_active and not entry.is_filled 
+                for entry in position.entries
+            )
+            
+            expected['second_dca'] = {
+                'price': second_dca_price,
+                'should_exist': position.current_stage in ['initial', 'first_dca'] and not second_dca_exists,
+                'stage': 'second_dca'
+            }
+            
+            return expected
+            
+        except Exception as e:
+            self.logger.error(f"예상 DCA 주문 분석 실패 {position.symbol}: {e}")
+            return {}
+    
+    def _create_missing_dca_order(self, position: DCAPosition, stage: str, order_info: Dict, total_balance: float = None) -> Dict[str, Any]:
+        """누락된 DCA 주문 생성"""
+        try:
+            if not total_balance:
+                total_balance = 10000.0  # 기본값 사용
+            
+            price = order_info['price']
+            
+            # DCA 설정에 따른 주문 생성
+            if stage == 'first_dca':
+                amount = total_balance * self.config['first_dca_weight']
+                leverage = self.config['first_dca_leverage']
+            elif stage == 'second_dca':
+                amount = total_balance * self.config['second_dca_weight']
+                leverage = self.config['second_dca_leverage']
+            else:
+                return {'success': False, 'error': f'Unknown DCA stage: {stage}'}
+            
+            quantity = (amount * leverage) / price
+            
+            # 지정가 주문 실행
+            order_result = self._execute_limit_order(position.symbol, quantity, "buy", price)
+            
+            if order_result['success']:
+                # DCA 엔트리 추가
+                dca_entry = DCAEntry(
+                    stage=stage,
+                    entry_price=price,
+                    quantity=quantity,
+                    notional=amount * leverage,
+                    leverage=leverage,
+                    timestamp=get_korea_time().isoformat(),
+                    is_active=True,
+                    order_type="limit",
+                    order_id=order_result['order_id'],
+                    is_filled=False
+                )
+                position.entries.append(dca_entry)
+                position.last_update = get_korea_time().isoformat()
+                self.save_data()
+                
+                return {'success': True, 'order_id': order_result['order_id']}
+            else:
+                return {'success': False, 'error': order_result.get('error', 'Order execution failed')}
+                
+        except Exception as e:
+            self.logger.error(f"누락 DCA 주문 생성 실패 {position.symbol} {stage}: {e}")
+            return {'success': False, 'error': str(e)}
 
 # 모듈 테스트용 함수들
 def test_dca_system():

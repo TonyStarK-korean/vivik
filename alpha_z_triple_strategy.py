@@ -6,11 +6,11 @@ A전략(15분봉 바닥타점) + B전략(15분봉 급등초입) + C전략(3분�
 거래 설정:
 - 레버리지: 20배
 - 포지션 크기: 원금 1.0% x 20배 레버리지 (20% 노출)
-- 최대 진입 종목: 10종목
-- 재진입: 순환매 활성화 (최대 3회 순환매)
+- 최대 진입 종목: 20종목
+- 재진입: 순환매 활성화 (최초진입가 기준 청산모드 전환)
 - 단계별 손절: 초기 -10% (시드 대비 6% 손실)
 - 종목당 최대 비중: 3.0% (초기 1.0% + DCA 1.0% + 1.0%)
-- 최대 원금 사용: 30% (10종목 × 3.0%)
+- 최대 원금 사용: 60% (20종목 × 3.0%)
 - 손실 계산: 총 3% × 20배 × -10% = 시드의 6% 손실
 
 DCA 시스템:
@@ -20,9 +20,9 @@ DCA 시스템:
 - 전량 손절: -10% (시드 대비 6% 손실)
 
 전략 조건:
-A전략(15분봉 바닥타점): 5개 조건 - (ma80<ma480 and ma5<ma480) and BB복합조건 및 골든크로스 and 시가대비고가조건
+A전략(15분봉 바닥타점): 임시 비활성화 - (ma80<ma480 and ma5<ma480) and BB복합조건 및 골든크로스 and 시가대비고가조건
 B전략(15분봉 급등초입): 6개 조건 - 기존 급등초입 조건 + 시가대비고가조건 추가
-C전략(3분봉 바닥급등타점): 4개 조건 - MA80-MA480 골든크로스 and BB80-BB480 골든크로스(15봉이내) and 종가<MA5 골든크로스 and 시가대비고가조건
+C전략(3분봉 바닥급등타점): 3개 조건 - MA80-MA480 골든크로스(300봉이내) and BB80-BB480 골든크로스(300봉이내) and MA20-MA80 골든크로스(5봉이내)
 """
 
 import os
@@ -161,12 +161,37 @@ class FifteenMinuteMegaStrategy:
             self.ws_provider = None
             print("[WARN] WebSocket OHLCV 제공자 없음")
         
-        # DCA 매니저 초기화 (레버리지 20배)
+        # DCA 매니저 초기화 (레버리지 20배) - Exchange 연결 안정성 강화
         if HAS_DCA_MANAGER:
-            self.dca_manager = ImprovedDCAPositionManager()
-            # 레버리지 20배로 설정 업데이트
-            self.dca_manager.leverage = 20.0
-            print("[INFO] DCA 매니저 초기화 완료 - 레버리지 20배 적용")
+            # 프라이빗 API 있을 때만 DCA 매니저 활성화
+            if self.private_exchange and hasattr(self.private_exchange, 'apiKey') and self.private_exchange.apiKey:
+                try:
+                    self.dca_manager = ImprovedDCAPositionManager(
+                        exchange=self.private_exchange,
+                        telegram_bot=self.telegram_bot if hasattr(self, 'telegram_bot') else None,
+                        strategy=self
+                    )
+                    # 레버리지 20배로 설정 업데이트
+                    self.dca_manager.leverage = 20.0
+                    
+                    # 🔧 DCA 매니저 Exchange 연결 상태 검증
+                    print(f"[INFO] DCA 매니저 초기화 완료 - 프라이빗 API, 레버리지 20배")
+                    print(f"[INFO] API 키 설정 확인: {self.private_exchange.apiKey[:8]}...")
+                    print(f"[INFO] DCA-Exchange 연결 상태: {type(self.dca_manager.exchange).__name__}")
+                    print(f"[INFO] DCA-Exchange API 키 상태: {'OK' if self.dca_manager.exchange.apiKey else 'MISSING'}")
+                    
+                    # 🔧 Exchange 참조 안정성 확보 - 같은 객체 인스턴스 보장
+                    if id(self.dca_manager.exchange) != id(self.private_exchange):
+                        print(f"[WARN] DCA Exchange 객체 ID 불일치: DCA={id(self.dca_manager.exchange)} vs Main={id(self.private_exchange)}")
+                    else:
+                        print(f"[INFO] ✅ DCA-Main Exchange 객체 동일성 확인됨")
+                        
+                except Exception as dca_init_error:
+                    print(f"[ERROR] DCA 매니저 초기화 실패: {dca_init_error}")
+                    self.dca_manager = None
+            else:
+                self.dca_manager = None
+                print("[WARN] DCA 매니저 비활성화 - 프라이빗 API 필요 (거래 실행용)")
         else:
             self.dca_manager = None
             print("[WARN] DCA 매니저 없음")
@@ -190,6 +215,9 @@ class FifteenMinuteMegaStrategy:
         # 중복 알림 방지 시스템 (심볼 + 사유별로 1회만 알림)
         self.notification_cache = {}  # {symbol_reason: timestamp}
         self.notification_cooldown = 3600  # 1시간 쿨다운
+        
+        # 🔧 DCA Exchange 재연결 요청 플래그
+        self._request_exchange_reconnect = False
         
         print("15분봉 초필살기 전략 시스템 초기화 완료")
         print(f"   레버리지: 20배")
@@ -224,15 +252,37 @@ class FifteenMinuteMegaStrategy:
         try:
             if signal_data.get('strategy_details'):
                 details = signal_data['strategy_details']
-                if details.get('strategy_a', {}).get('signal') and details.get('strategy_b', {}).get('signal'):
+                
+                # 각 전략 신호 확인
+                a_signal = details.get('strategy_a', {}).get('signal', False)
+                b_signal = details.get('strategy_b', {}).get('signal', False) 
+                c_signal = details.get('strategy_c', {}).get('signal', False)
+                
+                # 복합 전략 우선 체크
+                if a_signal and b_signal and c_signal:
+                    return "[A+B+C전략]"
+                elif a_signal and b_signal:
                     return "[A+B전략]"
-                elif details.get('strategy_a', {}).get('signal'):
+                elif a_signal and c_signal:
+                    return "[A+C전략]"
+                elif b_signal and c_signal:
+                    return "[B+C전략]"
+                # 단일 전략 체크
+                elif a_signal:
                     return "[A전략]"
-                elif details.get('strategy_b', {}).get('signal'):
+                elif b_signal:
                     return "[B전략]"
+                elif c_signal:
+                    return "[C전략]"
+                    
+            # strategy_type 필드 직접 확인 (백업)
+            strategy_type = signal_data.get('strategy_type', '')
+            if strategy_type:
+                return strategy_type
+                
             return "[전략미상]"
-        except:
-            return "[전략미상]"
+        except Exception as e:
+            return f"[전략오류:{e}]"
     
     def _send_notification_once(self, symbol, reason, message):
         """중복 방지 텔레그램 알림 (같은 심볼+사유로 1시간에 1회만)"""
@@ -417,14 +467,14 @@ class FifteenMinuteMegaStrategy:
                         elif strategy_type == 'B':
                             failed_conds.append("MA5-MA20 골든크로스+현재가")
                         else:  # C전략
-                            failed_conds.append("종가<MA5 골든크로스")
+                            failed_conds.append("MA5-MA20 골든크로스/복합조건")
                     elif '조건4' in str(cond):
                         if strategy_type == 'A':
                             failed_conds.append("현재가-MA5 조건")
                         elif strategy_type == 'B':
                             failed_conds.append("BB200-MA480 상향돌파")
                         else:  # C전략
-                            failed_conds.append("시가대비고가 3%이상")
+                            failed_conds.append("1분봉 MA5-MA20 골든크로스")
                     elif '조건5' in str(cond):
                         if strategy_type == 'A':
                             failed_conds.append("시가대비고가 3%이상")
@@ -434,70 +484,10 @@ class FifteenMinuteMegaStrategy:
                         failed_conds.append("시가대비고가 5%이상")
             return failed_conds
 
-        # 🅰️ A전략(바닥타점) 결과
-        print(f"\n🅰️ A전략(바닥타점) 결과")
-        print(f"{'='*60}")
-        
-        if a_entry_signals:
-            print(f"┌{'─'*30}┐")
-            print(f"│   🔥 진입신호 ({len(a_entry_signals)}개)        │")
-            print(f"└{'─'*30}┘")
-            # 2x2 배치
-            for i in range(0, len(a_entry_signals), 2):
-                row = a_entry_signals[i:i+2]
-                if len(row) == 2:
-                    print(f"   🎯 {GREEN}{row[0]['symbol']:<8}{RESET}   🎯 {GREEN}{row[1]['symbol']}{RESET}")
-                else:
-                    print(f"   🎯 {GREEN}{row[0]['symbol']}{RESET}")
-        else:
-            print(f"┌{'─'*30}┐")
-            print(f"│  🔥 진입신호 (없음)        │")
-            print(f"└{'─'*30}┘")
-        
-        if a_near_entry:
-            print(f"\n┌{'─'*55}┐")
-            print(f"│  🔥 진입임박 ({len(a_near_entry)}개) - 조건 1개 미충족                 │")
-            print(f"└{'─'*55}┘")
-            for signal in a_near_entry:
-                # 해당 심볼의 원본 결과 찾기
-                original_result = next((r for r in all_results if r['symbol'].replace('/USDT:USDT', '') == signal['symbol']), None)
-                failed_conds = get_failed_conditions(original_result, 'A') if original_result else []
-                failed_text = "\033[91m" + ", ".join(failed_conds) + "\033[0m" if failed_conds else "\033[91m미상\033[0m"
-                print(f"   🔥 \033[93m{signal['symbol']}\033[0m - 미충족: {failed_text}")
-        else:
-            print(f"\n┌{'─'*30}┐")
-            print(f"│  🔥 진입임박 (없음)        │")
-            print(f"└{'─'*30}┘")
-        
-        if a_potential_entry:
-            print(f"\n┌{'─'*55}┐")
-            print(f"│  ⚡ 진입확률 ({len(a_potential_entry)}개) - 조건 2개 미충족                 │")
-            print(f"└{'─'*55}┘")
-            # 가로 4줄 배치
-            symbols = [signal['symbol'] for signal in a_potential_entry]
-            for i in range(0, len(symbols), 4):
-                row = symbols[i:i+4]
-                formatted_row = [f"\033[93m{symbol}\033[0m" for symbol in row]
-                print(f"   ⚡ {' | '.join(formatted_row)}")
-        else:
-            print(f"\n┌{'─'*30}┐")
-            print(f"│  ⚡ 진입확률 (없음)        │")
-            print(f"└{'─'*30}┘")
-        
-        if a_watchlist:
-            print(f"\n┌{'─'*40}┐")
-            print(f"│   👀 관심종목 ({len(a_watchlist)}개)                  │")
-            print(f"└{'─'*40}┘")
-            # 가로 4줄 배치 (최대 10개)
-            symbols = [signal['symbol'] for signal in a_watchlist[:10]]
-            for i in range(0, len(symbols), 4):
-                row = symbols[i:i+4]
-                formatted_row = [f"\033[93m{symbol}\033[0m" for symbol in row]
-                print(f"   👀 {' | '.join(formatted_row)}")
-        else:
-            print(f"\n┌{'─'*30}┐")
-            print(f"│  👀 관심종목 (없음)        │")
-            print(f"└{'─'*30}┘")
+        # 🅰️ A전략(바닥타점) 결과 - 임시 비활성화로 출력 생략
+        # print(f"\n🅰️ A전략(바닥타점) 결과")
+        # print(f"{'='*60}")
+        # A전략 출력 코드 모두 주석 처리 (비활성화됨)
         
         # 🅱️ B전략(급등초입) 결과
         print(f"\n🅱️ B전략(급등초입) 결과")
@@ -632,11 +622,11 @@ class FifteenMinuteMegaStrategy:
         # 📊 전체 진입신호 통합 (실제 거래 대상) - a_entry_signals, b_entry_signals, c_entry_signals 통합
         all_entry_signals = []
         
-        # A전략, B전략, C전략의 진입신호 통합
-        for signal in a_entry_signals:
-            signal_copy = signal.copy()
-            signal_copy['strategy_type'] = '[A전략]'
-            all_entry_signals.append(signal_copy)
+        # A전략, B전략, C전략의 진입신호 통합 (A전략 비활성화로 제외)
+        # for signal in a_entry_signals:
+        #     signal_copy = signal.copy()
+        #     signal_copy['strategy_type'] = '[A전략]'
+        #     all_entry_signals.append(signal_copy)
             
         for signal in b_entry_signals:
             signal_copy = signal.copy()
@@ -672,14 +662,14 @@ class FifteenMinuteMegaStrategy:
         final_entry_signals = list(unique_signals.values())
         
         if final_entry_signals:
-            print(f"\n🎯 전체 진입신호 통합 ({len(final_entry_signals)}개)")
+            print(f"\n🎯 전체 진입신호 통합 ({len(final_entry_signals)}개) - B+C전략")
             print(f"{'─'*40}")
             for signal in final_entry_signals:
                 clean_symbol = signal['symbol'].replace('/USDT:USDT', '')
                 strategy_type = signal['strategy_type']
                 print(f"   🎯 {GREEN}{clean_symbol}{RESET} {strategy_type}")
         else:
-            print(f"\n🎯 전체 진입신호 통합 (없음)")
+            print(f"\n🎯 전체 진입신호 통합 (없음) - B+C전략")
     
     def _load_notification_history(self):
         """텔레그램 알림 기록 로드"""
@@ -977,26 +967,25 @@ class FifteenMinuteMegaStrategy:
                     'strategy_c': {'signal': False, 'conditions': [], 'name': 'C전략(MA계산실패)'}
                 }
             
-            # 강제 전제조건: 15분봉 MA80 < MA480 AND 15분봉 MA5 < MA480
-            basic_ma_condition = (ma80_15m < ma480_15m and ma5_15m < ma480_15m)
+            # 전제조건 제거 - B전략에서 별도로 적용하지 않음
+            # basic_ma_condition = (ma80_15m < ma480_15m and ma5_15m < ma480_15m)
             
-            # 전제조건 미충족시 강제로 False 반환
-            if not basic_ma_condition:
-                clean_sym = symbol.replace('/USDT:USDT', '')
-                if clean_sym in ['BARD', 'LINK', 'BULLA', 'MUBARAK', 'MELANIA', 'METIS', 'TRADOOR', 'BNT', 'GPS']:  # 문제 심볼들만 로그 출력
-                    print(f"🚫 MA80>MA480 차단: {clean_sym} - MA80:{ma80_15m:.4f} >= MA480:{ma480_15m:.4f}")
-                conditions.append(f"[BLOCKED] 15분봉MA80≥MA480 전제조건 차단 - MA80:{ma80_15m:.6f}, MA480:{ma480_15m:.6f}")
-                return False, conditions, {
-                    'strategy_a': {'signal': False, 'conditions': conditions, 'name': 'A전략(차단됨)'},
-                    'strategy_b': {'signal': False, 'conditions': [], 'name': 'B전략(차단됨)'},
-                    'strategy_c': {'signal': False, 'conditions': [], 'name': 'C전략(차단됨)'}
-                }
+            # 전제조건 체크 제거
+            # if not basic_ma_condition:
+            #     conditions.append(f"[BLOCKED] 15분봉MA80≥MA480 전제조건 차단 - MA80:{ma80_15m:.6f}, MA480:{ma480_15m:.6f}")
+            #     return False, conditions, {
+            #         'strategy_a': {'signal': False, 'conditions': conditions, 'name': 'A전략(차단됨)'},
+            #         'strategy_b': {'signal': False, 'conditions': [], 'name': 'B전략(차단됨)'},
+            #         'strategy_c': {'signal': False, 'conditions': [], 'name': 'C전략(차단됨)'}
+            #     }
             
-            # 전제조건 통과시에만 전략 체크 실행
+            # 전제조건 체크 없이 바로 전략 실행
             # 전제조건 통과한 심볼에 대한 로그는 제거 (너무 많음)
             
-            # A전략: 15분봉 바닥 타점 체크
-            strategy_a_signal, strategy_a_conditions = self._check_strategy_a_bottom_entry(symbol, df_calc)
+            # A전략: 15분봉 바닥 타점 체크 (임시 비활성화)
+            # strategy_a_signal, strategy_a_conditions = self._check_strategy_a_bottom_entry(symbol, df_calc)
+            strategy_a_signal = False  # A전략 임시 비활성화
+            strategy_a_conditions = ["[A전략] 임시 비활성화됨"]
             
             # B전략: 15분봉 급등초입 타점 체크
             strategy_b_signal, strategy_b_conditions = self._check_strategy_b_uptrend_entry(df_calc)
@@ -1004,8 +993,8 @@ class FifteenMinuteMegaStrategy:
             # C전략: 3분봉 필살기 타점 체크
             strategy_c_signal, strategy_c_conditions = self._check_strategy_c_3min_precision(symbol)
             
-            # 최종 신호 결정
-            is_signal = strategy_a_signal or strategy_b_signal or strategy_c_signal
+            # 최종 신호 결정 (A전략 제외)
+            is_signal = strategy_b_signal or strategy_c_signal  # A전략 비활성화
             
             
             # 전략별 상세 정보 구성
@@ -1032,22 +1021,22 @@ class FifteenMinuteMegaStrategy:
             conditions.extend(strategy_b_conditions)
             conditions.extend(strategy_c_conditions)
             
-            # 전략별 결과 추가
+            # 전략별 결과 추가 (A전략 비활성화)
             if strategy_a_signal:
-                conditions.append("[전략결과] A전략(바닥타점) 조건 충족 ✅")
+                conditions.append("[전략결과] A전략(바닥타점) 조건 충족 ✅ (비활성화됨)")
             if strategy_b_signal:
                 conditions.append("[전략결과] B전략(급등초입) 조건 충족 ✅")
             if strategy_c_signal:
                 conditions.append("[전략결과] C전략(3분봉 필살기) 조건 충족 ✅")
             if not is_signal:
-                conditions.append("[전략결과] A전략, B전략, C전략 모두 미충족 ❌")
+                conditions.append("[전략결과] B전략, C전략 모두 미충족 ❌ (A전략 비활성화)")
             
             
             # 디버그 로그
             if is_signal:
                 strategy_names = []
-                if strategy_a_signal:
-                    strategy_names.append("A전략(바닥타점)")
+                # if strategy_a_signal:
+                #     strategy_names.append("A전략(바닥타점)")  # A전략 비활성화
                 if strategy_b_signal:
                     strategy_names.append("B전략(급등초입)")
                 if strategy_c_signal:
@@ -1305,17 +1294,17 @@ class FifteenMinuteMegaStrategy:
             
             conditions.append(f"[B전략 조건1] MA80-MA480 골든크로스 ({condition1_detail}): {condition1}")
             
-            # 조건 2: BB 골든크로스 (100봉이내)
+            # 조건 2: BB 골든크로스 (200봉이내)
             condition2 = False
             condition2_detail = "골든크로스 없음"
             
-            if len(df_calc) >= 100:
+            if len(df_calc) >= 200:
                 # BB200상단선(표편2)-BB480상단선(표편1.5) 골든크로스 또는 이격도 1%이내 체크
                 bb200_upper = df_calc['bb200_upper']
                 bb480_upper = df_calc['bb480_upper']
                 
-                if len(bb200_upper) >= 100 and len(bb480_upper) >= 100:
-                    for i in range(min(100, len(bb200_upper))):
+                if len(bb200_upper) >= 200 and len(bb480_upper) >= 200:
+                    for i in range(min(200, len(bb200_upper))):
                         bb200_val = bb200_upper.iloc[-(i+1)]
                         bb480_val = bb480_upper.iloc[-(i+1)]
                         
@@ -1342,8 +1331,8 @@ class FifteenMinuteMegaStrategy:
                     bb80_upper = df_calc.get('bb80_upper', pd.Series())
                     bb480_upper = df_calc['bb480_upper']
                     
-                    if len(bb80_upper) >= 100 and len(bb480_upper) >= 100:
-                        for i in range(min(100, len(bb80_upper))):
+                    if len(bb80_upper) >= 200 and len(bb480_upper) >= 200:
+                        for i in range(min(200, len(bb80_upper))):
                             bb80_val = bb80_upper.iloc[-(i+1)]
                             bb480_val = bb480_upper.iloc[-(i+1)]
                             
@@ -1548,11 +1537,15 @@ class FifteenMinuteMegaStrategy:
             return False, [f"B전략 체크 실패: {e}"]
     
     def _check_strategy_c_3min_precision(self, symbol):
-        """C전략: 3분봉 바닥급등타점"""
+        """C전략: 3분봉 바닥급등타점 (3개 조건) - 개선된 버전
+        조건1: 3분봉 300봉이내 MA80-MA480 골든크로스 OR 현재봉 MA80 < MA480
+        조건2: 3분봉 300봉이내 BB80상단선(표준편차2)-BB480상단선(표준편차1.5) 골든크로스  
+        조건3: 3분봉 5봉이내 1봉전 MA20-MA80 골든크로스
+        """
         try:
             conditions = []
             
-            # 3분봉 데이터 조회 (80+480=560봉 필요, 여유분으로 600봉 요청)
+            # 3분봉 데이터 조회 (300+480=780봉 필요, 여유분으로 850봉 요청)
             try:
                 df_3m = None
                 
@@ -1561,20 +1554,20 @@ class FifteenMinuteMegaStrategy:
                     try:
                         # 메서드가 존재하는지 확인
                         if hasattr(self.ws_provider, 'get_cached_ohlcv'):
-                            df_3m = self.ws_provider.get_cached_ohlcv(symbol, '3m', 600)
+                            df_3m = self.ws_provider.get_cached_ohlcv(symbol, '3m', 850)
                         else:
                             # 메서드가 없으면 일반 get_ohlcv 사용
-                            df_3m = self.ws_provider.get_ohlcv(symbol, '3m', 600)
+                            df_3m = self.ws_provider.get_ohlcv(symbol, '3m', 850)
                             
-                        if df_3m is not None and len(df_3m) >= 500:
+                        if df_3m is not None and len(df_3m) >= 780:
                             # WebSocket 성공 - 디버그 메시지
                             if symbol in ['APR/USDT:USDT', 'API3/USDT:USDT', 'PLAY/USDT:USDT']:
                                 print(f"[DEBUG] {symbol}: WebSocket 성공 - 3분봉 {len(df_3m)}개")
                             pass
                         else:
                             # 실패시 재시도
-                            df_3m = self.ws_provider.get_ohlcv(symbol, '3m', 600)
-                            if df_3m is not None and len(df_3m) >= 500:
+                            df_3m = self.ws_provider.get_ohlcv(symbol, '3m', 850)
+                            if df_3m is not None and len(df_3m) >= 780:
                                 if symbol in ['APR/USDT:USDT', 'API3/USDT:USDT', 'PLAY/USDT:USDT']:
                                     print(f"[DEBUG] {symbol}: 재시도 성공 - 3분봉 {len(df_3m)}개")
                             else:
@@ -1588,29 +1581,29 @@ class FifteenMinuteMegaStrategy:
                         df_3m = None
                 
                 # 2차 시도: WebSocket 실패시에만 REST API 시도 (API 제한 고려)
-                if df_3m is None or len(df_3m) < 500:
+                if df_3m is None or len(df_3m) < 780:
                     try:
-                        df_3m = self.exchange.fetch_ohlcv(symbol, '3m', limit=600)
+                        df_3m = self.exchange.fetch_ohlcv(symbol, '3m', limit=850)
                     except Exception as api_error:
                         return False, [f"[C전략] 3분봉 데이터 완전 실패: WebSocket 캐시 실패, REST API 제한 - {api_error}"]
                 
-                if df_3m is None or len(df_3m) < 500:
-                    return False, [f"[C전략] 3분봉 데이터 부족: {len(df_3m) if df_3m is not None else 0}봉 (500봉 필요) - 모든 데이터 소스 실패"]
+                if df_3m is None or len(df_3m) < 780:
+                    return False, [f"[C전략] 3분봉 데이터 부족: {len(df_3m) if df_3m is not None else 0}봉 (780봉 필요) - 모든 데이터 소스 실패"]
                 
                 # DataFrame 변환
                 df_calc = pd.DataFrame(df_3m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df_calc['timestamp'] = pd.to_datetime(df_calc['timestamp'], unit='ms')
                 
                 # 기술적 지표 계산
-                df_calc = self._calculate_technical_indicators(df_calc)
+                df_calc = self.calculate_indicators(df_calc)
                 
-                if len(df_calc) < 500:
+                if len(df_calc) < 780:
                     return False, [f"[C전략] 지표 계산 후 데이터 부족: {len(df_calc)}봉"]
                     
             except Exception as e:
                 return False, [f"[C전략] 3분봉 데이터 조회 실패: {e}"]
             
-            # 조건 1: 10봉이내 MA80-MA480 골든크로스 or 현재봉 MA80 < MA480
+            # 조건 1: 300봉이내 MA80-MA480 골든크로스 or 현재봉 MA80 < MA480
             condition1 = False
             condition1_detail = "미충족"
             
@@ -1624,9 +1617,9 @@ class FifteenMinuteMegaStrategy:
                         condition1 = True
                         condition1_detail = "현재봉 MA80<MA480"
                     else:
-                        # 10봉이내 MA80-MA480 골든크로스 체크
-                        if len(df_calc) >= 11:
-                            for i in range(min(10, len(df_calc) - 1)):
+                        # 300봉이내 MA80-MA480 골든크로스 체크
+                        if len(df_calc) >= 301:
+                            for i in range(min(300, len(df_calc) - 1)):
                                 curr_idx = -(i+1)
                                 prev_idx = -(i+2)
                                 
@@ -1645,12 +1638,12 @@ class FifteenMinuteMegaStrategy:
                                     condition1_detail = f"{i+1}봉전 MA80-MA480 골든크로스"
                                     break
                                 
-                conditions.append(f"[C전략 조건1] MA80-MA480 조건 ({condition1_detail}): {condition1}")
+                conditions.append(f"[C전략 조건1] MA80-MA480 조건 300봉이내 ({condition1_detail}): {condition1}")
             except Exception as e:
                 conditions.append(f"[C전략 조건1] MA80-MA480 조건 계산 실패: {e}")
                 condition1 = False
             
-            # 조건 2: 15봉이내 BB80상단선(표편2)-BB480상단선(표편1.5) 골든크로스
+            # 조건 2: 300봉이내 BB80상단선(표편2)-BB480상단선(표편1.5) 골든크로스
             condition2 = False
             condition2_detail = "골든크로스 없음"
             
@@ -1658,8 +1651,8 @@ class FifteenMinuteMegaStrategy:
                 bb80_upper = df_calc.get('bb80_upper', pd.Series())
                 bb480_upper = df_calc['bb480_upper']
                 
-                if len(bb80_upper) >= 16 and len(bb480_upper) >= 16:
-                    for i in range(min(15, len(bb80_upper) - 1)):
+                if len(bb80_upper) >= 301 and len(bb480_upper) >= 301:
+                    for i in range(min(300, len(bb80_upper) - 1)):
                         curr_idx = -(i+1)
                         prev_idx = -(i+2)
                         
@@ -1678,131 +1671,45 @@ class FifteenMinuteMegaStrategy:
                             condition2_detail = f"{i+1}봉전 BB80-BB480 골든크로스"
                             break
                             
-                conditions.append(f"[C전략 조건2] BB80-BB480 골든크로스 ({condition2_detail}): {condition2}")
+                conditions.append(f"[C전략 조건2] BB80-BB480 골든크로스 300봉이내 ({condition2_detail}): {condition2}")
             except Exception as e:
                 conditions.append(f"[C전략 조건2] BB80-BB480 골든크로스 계산 실패: {e}")
                 condition2 = False
             
-            # 조건 3: 5봉이내 1봉전 종가<MA5 골든크로스
+            # 조건 3: 5봉이내 1봉전 MA20-MA80 골든크로스
             condition3 = False
             condition3_detail = "골든크로스 없음"
             
             try:
-                if len(df_calc) >= 6:
-                    for i in range(1, min(6, len(df_calc) - 1)):  # 1봉전부터 5봉전까지
-                        cross_idx = -(i+1)  # 골든크로스 봉
-                        prev_idx = -(i+2)   # 골든크로스 이전봉
+                if len(df_calc) >= 6:  # 5봉이내 체크를 위해 6봉 필요
+                    for i in range(1, min(6, len(df_calc))):  # 1봉전부터 5봉전까지
+                        curr_idx = -(i+1)
+                        prev_idx = -(i+2)
                         
                         if abs(prev_idx) > len(df_calc):
                             break
                             
-                        close_prev = df_calc['close'].iloc[prev_idx]
-                        close_curr = df_calc['close'].iloc[cross_idx]
-                        ma5_prev = df_calc['ma5'].iloc[prev_idx]
-                        ma5_curr = df_calc['ma5'].iloc[cross_idx]
+                        ma20_prev = df_calc['ma20'].iloc[prev_idx]
+                        ma20_curr = df_calc['ma20'].iloc[curr_idx]
+                        ma80_prev = df_calc['ma80'].iloc[prev_idx]
+                        ma80_curr = df_calc['ma80'].iloc[curr_idx]
                         
-                        if (pd.notna(close_prev) and pd.notna(close_curr) and
-                            pd.notna(ma5_prev) and pd.notna(ma5_curr) and
-                            close_prev < ma5_prev and close_curr >= ma5_curr):
+                        if (pd.notna(ma20_prev) and pd.notna(ma20_curr) and
+                            pd.notna(ma80_prev) and pd.notna(ma80_curr) and
+                            ma20_prev <= ma80_prev and ma20_curr > ma80_curr):
                             condition3 = True
-                            condition3_detail = f"{i+1}봉전 종가-MA5 골든크로스"
+                            condition3_detail = f"{i+1}봉전 MA20-MA80 골든크로스"
                             break
                             
-                conditions.append(f"[C전략 조건3] 종가<MA5 골든크로스 ({condition3_detail}): {condition3}")
+                conditions.append(f"[C전략 조건3] 5봉이내 1봉전 MA20-MA80 골든크로스 ({condition3_detail}): {condition3}")
             except Exception as e:
-                conditions.append(f"[C전략 조건3] 종가<MA5 골든크로스 계산 실패: {e}")
+                conditions.append(f"[C전략 조건3] MA20-MA80 골든크로스 계산 실패: {e}")
                 condition3 = False
             
-            # 조건 4: (3분봉상 or 15분봉상 or 30분봉상) 30봉이내 시가대비고가 3%이상 1회이상
-            condition4 = False
-            condition4_detail = "미충족"
+            # C전략 최종 신호 판정: 조건1, 조건2, 조건3만 체크 (3개 조건)
+            strategy_c_signal = condition1 and condition2 and condition3
             
-            try:
-                # 3분봉에서 체크
-                high_move_count_3m = 0
-                if len(df_calc) >= 30:
-                    for i in range(min(30, len(df_calc))):
-                        candle = df_calc.iloc[-(i+1)]
-                        if pd.notna(candle['open']) and pd.notna(candle['high']) and candle['open'] > 0:
-                            # 시가대비고가 상승률 계산
-                            high_move_pct = ((candle['high'] - candle['open']) / candle['open']) * 100
-                            if high_move_pct >= 3.0:
-                                high_move_count_3m += 1
-                
-                # 15분봉에서 체크 (WebSocket 또는 캐시 사용)
-                high_move_count_15m = 0
-                try:
-                    # 15분봉 데이터 조회 (WebSocket 우선)
-                    df_15m = None
-                    if self.ws_provider:
-                        df_15m = self.ws_provider.get_ohlcv(symbol, '15m', 120)  # 30봉 + 여유분
-                    
-                    if df_15m is not None and len(df_15m) >= 30:
-                        # 15분봉 시가대비고가 체크
-                        for i in range(min(30, len(df_15m))):
-                            candle_data = df_15m[-(i+1)]  # 최신 데이터부터
-                            if len(candle_data) >= 5 and candle_data[1] > 0:  # open > 0
-                                # [timestamp, open, high, low, close, volume]
-                                open_price = candle_data[1]
-                                high_price = candle_data[2]
-                                high_move_pct = ((high_price - open_price) / open_price) * 100
-                                if high_move_pct >= 3.0:
-                                    high_move_count_15m += 1
-                except Exception as e15m:
-                    # 15분봉 조회 실패시 continue
-                    pass
-                
-                # 30분봉에서 체크 (WebSocket 또는 캐시 사용)
-                high_move_count_30m = 0
-                try:
-                    # 30분봉 데이터 조회 (WebSocket 우선)
-                    df_30m = None
-                    if self.ws_provider:
-                        df_30m = self.ws_provider.get_ohlcv(symbol, '30m', 120)  # 30봉 + 여유분
-                    
-                    if df_30m is not None and len(df_30m) >= 30:
-                        # 30분봉 시가대비고가 체크
-                        for i in range(min(30, len(df_30m))):
-                            candle_data = df_30m[-(i+1)]  # 최신 데이터부터
-                            if len(candle_data) >= 5 and candle_data[1] > 0:  # open > 0
-                                # [timestamp, open, high, low, close, volume]
-                                open_price = candle_data[1]
-                                high_price = candle_data[2]
-                                high_move_pct = ((high_price - open_price) / open_price) * 100
-                                if high_move_pct >= 3.0:
-                                    high_move_count_30m += 1
-                except Exception as e30m:
-                    # 30분봉 조회 실패시 continue
-                    pass
-                
-                # 3분봉 또는 15분봉 또는 30분봉에서 조건 충족시 통과
-                total_count = high_move_count_3m + high_move_count_15m + high_move_count_30m
-                condition4 = total_count >= 1
-                
-                if condition4:
-                    timeframe_details = []
-                    if high_move_count_3m > 0:
-                        timeframe_details.append(f"3분봉 {high_move_count_3m}회")
-                    if high_move_count_15m > 0:
-                        timeframe_details.append(f"15분봉 {high_move_count_15m}회")
-                    if high_move_count_30m > 0:
-                        timeframe_details.append(f"30분봉 {high_move_count_30m}회")
-                    condition4_detail = " + ".join(timeframe_details)
-                else:
-                    condition4_detail = f"3분봉 {high_move_count_3m}회, 15분봉 {high_move_count_15m}회, 30분봉 {high_move_count_30m}회 (모두 0회)"
-                    
-                conditions.append(f"[C전략 조건4] (3분봉 or 15분봉 or 30분봉) 30봉이내 시가대비고가 3%이상 ({condition4_detail}): {condition4}")
-            except Exception as e:
-                conditions.append(f"[C전략 조건4] 시가대비고가 조건 계산 실패: {e}")
-                condition4 = False
-            
-            # C전략 최종 신호 판정: 모든 조건이 True여야 함
-            strategy_c_signal = condition1 and condition2 and condition3 and condition4
-            
-            # 디버그 메시지 (특정 심볼만)
-            clean_sym = symbol.replace('/USDT:USDT', '')
-            if clean_sym in ['APR', 'API3', 'PLAY']:
-                print(f"[DEBUG] C전략 {clean_sym}: 조건1={condition1}, 조건2={condition2}, 조건3={condition3}, 조건4={condition4} → 신호={strategy_c_signal}")
+            # C전략 디버그 메시지 제거 (데이터 검증 완료)
                 
             return strategy_c_signal, conditions
             
@@ -2842,6 +2749,10 @@ class FifteenMinuteMegaStrategy:
     
     def execute_trade(self, signal_data):
         """실전매매 거래 실행"""
+        # 초기 변수 선언 (exception 처리용)
+        position_value = 0
+        free_usdt = 0
+        
         try:
             if not self.private_exchange:
                 print(f"⚠️ 프라이빗 API 없음 - {signal_data['clean_symbol']} 거래 건너뛰기")
@@ -2851,10 +2762,10 @@ class FifteenMinuteMegaStrategy:
             price = signal_data['price']
             clean_symbol = signal_data['clean_symbol']
             
-            # 포지션 개수 제한 체크 (최대 10개)
+            # 포지션 개수 제한 체크 (최대 20개)
             portfolio = self.get_portfolio_summary()
-            if portfolio['open_positions'] >= 10:
-                print(f"⚠️ 최대 포지션 개수 도달 (10개) - {clean_symbol} 진입 건너뛰기")
+            if portfolio['open_positions'] >= 20:
+                print(f"⚠️ 최대 포지션 개수 도달 (20개) - {clean_symbol} 진입 건너뛰기")
                 return False
             
             # 중복 포지션 체크
@@ -2874,6 +2785,7 @@ class FifteenMinuteMegaStrategy:
             position_value = free_usdt * 0.01  # 1%
             leverage = 20
             quantity = (position_value * leverage) / price  # 실제 구매할 수량
+            
             
             
             if free_usdt < position_value:
@@ -2943,6 +2855,28 @@ class FifteenMinuteMegaStrategy:
                     'order_id': order['id']
                 }
                 
+                # 🔥 DCA 매니저에 포지션 등록 (신규 통합)
+                if self.dca_manager and HAS_DCA_MANAGER:
+                    try:
+                        # 전체 잔고 조회 (DCA 매니저가 비중 계산에 필요)
+                        current_balance = self.get_portfolio_summary().get('total_balance', 0)
+                        
+                        dca_success = self.dca_manager.add_position(
+                            symbol=symbol,
+                            entry_price=filled_price,
+                            quantity=filled_qty,
+                            notional=position_value * leverage,  # 실제 포지션 가치 (레버리지 적용)
+                            leverage=float(leverage),
+                            total_balance=current_balance
+                        )
+                        if dca_success:
+                            print(f"✅ DCA 매니저 포지션 등록 완료: {clean_symbol}")
+                        else:
+                            print(f"⚠️ DCA 매니저 포지션 등록 실패: {clean_symbol}")
+                    except Exception as e:
+                        print(f"❌ DCA 매니저 등록 오류: {clean_symbol} - {e}")
+                        self.logger.error(f"DCA 매니저 포지션 등록 실패 {symbol}: {e}")
+                
                 print(f"✅ 실전 진입 완료: {GREEN}{clean_symbol}{RESET}")
                 print(f"   💰 진입가: ${filled_price:,.4f}")
                 print(f"   📊 수량: {filled_qty:.6f}")
@@ -2950,7 +2884,7 @@ class FifteenMinuteMegaStrategy:
                 print(f"   💵 투입금액: ${position_value:.0f} USDT")
                 print(f"   📋 주문ID: {order['id']}")
                 
-                # DCA 주문 등록
+                # DCA 주문 등록 (기존 수동 방식 - 향후 DCA 매니저로 대체 예정)
                 self._place_dca_orders(symbol, filled_price, quantity)
                 
                 # 텔레그램 성공 알림 (중복 방지) - 상세 정보 포함
@@ -3003,11 +2937,22 @@ class FifteenMinuteMegaStrategy:
             print(error_msg)
             # 실패 알림 (중복 방지) - 상세 정보 포함
             strategy_type = self._get_strategy_type(signal_data)
+            
+            # position_value가 0인 경우 현재 잔고를 조회해서 다시 계산
+            if position_value == 0:
+                try:
+                    if self.private_exchange:
+                        balance = self.private_exchange.fetch_balance()
+                        free_usdt = balance['USDT']['free']
+                        position_value = free_usdt * 0.01
+                except:
+                    position_value = 0  # 잔고 조회도 실패한 경우
+            
             detailed_msg = f"""❌ <b>{clean_symbol}</b> 💚 거래 실패 (시스템오류)
 ━━━━━━━━━━━━━━━━━━━━━━
 🎯 전략: {strategy_type}
 💰 진입가격: ${price:.4f}
-💵 투입금액: ${(free_usdt * 0.01):.0f} USDT (1.0%)
+💵 투입금액: ${position_value:.0f} USDT (1.0%)
 ⚠️ 실패사유: 시스템 오류
 📋 오류정보: {str(e)[:100]}
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -3117,16 +3062,15 @@ class FifteenMinuteMegaStrategy:
             return None
     
     def check_real_position_status(self):
-        """실제 포지션 상태 체크 (주문 체결 여부 확인)"""
+        """실제 포지션 상태 체크 및 DCA 주문 자동 관리"""
         try:
             if not self.private_exchange:
                 return
                 
             # 실제 포지션 재조회
             positions = self.private_exchange.fetch_positions()
-            # open_orders 전체 조회는 제거 (Rate Limit 문제 회피)
             
-            # 현재 실제 포지션 업데이트
+            # 현재 실제 포지션 업데이트 및 DCA 상태 분석
             current_positions = {}
             for position in positions:
                 if position['contracts'] > 0:
@@ -3137,8 +3081,20 @@ class FifteenMinuteMegaStrategy:
                         'entry_price': position['entryPrice'],
                         'mark_price': position['markPrice'],
                         'unrealized_pnl': position['unrealizedPnl'],
-                        'percentage': position['percentage']
+                        'percentage': position['percentage'],
+                        'initial_margin': position.get('initialMargin', 0),
+                        'notional': position.get('notional', 0)
                     }
+                    
+                    # 포지션 크기로 진입 단계 판별 및 DCA 관리 (안전한 처리)
+                    try:
+                        self._manage_dca_orders_by_margin(symbol, position)
+                    except Exception as dca_err:
+                        self.logger.debug(f"DCA 주문 관리 오류 {symbol}: {dca_err}")
+                        continue
+            
+            # active_positions 업데이트
+            self.active_positions = current_positions
             
             # DCA 주문 체결 확인
             for symbol, pos_info in self.active_positions.items():
@@ -3195,7 +3151,381 @@ class FifteenMinuteMegaStrategy:
         except Exception as e:
             self.logger.error(f"실제 포지션 상태 체크 실패: {e}")
     
-    def run_continuous_scan(self, interval=30):
+    def _manage_dca_orders_by_margin(self, symbol, position):
+        """포지션 마진 분석으로 DCA 주문 자동 관리 (조용한 모드)"""
+        try:
+            # 포지션 데이터 타입 검증
+            if not isinstance(position, dict):
+                self.logger.debug(f"포지션 데이터 타입 오류 {symbol}: {type(position)}")
+                return
+                
+            clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
+            initial_margin = position.get('initialMargin', 0)
+            notional = position.get('notional', 0)
+            entry_price = position.get('entryPrice', 0)
+            size = position.get('contracts', 0)
+            
+            # None 값 및 유효성 체크 강화
+            if (initial_margin is None or initial_margin <= 0 or 
+                entry_price is None or entry_price <= 0 or
+                notional is None or notional <= 0 or
+                size is None or size <= 0):
+                return
+            
+            # 원금 대비 마진 계산 (20배 레버리지 기준)
+            leverage = 20
+            expected_initial_margin = notional / leverage
+            
+            # 진입 단계 판별 (마진 크기로 추정)
+            # 1% = 초기 진입, 2% = 1차 DCA 완료, 3% = 2차 DCA 완료
+            margin_ratio = initial_margin / (expected_initial_margin * 0.01) if expected_initial_margin > 0 else 0
+            
+            # 비정상적인 마진비율 체크 (100 이상은 데이터 오류)
+            if margin_ratio > 50:
+                return
+            
+            # 현재 열린 주문 조회 (에러 방지)
+            open_orders = self._get_open_orders_for_symbol(symbol)
+            if not open_orders:
+                open_orders = []
+                
+            # 주문 존재 여부 체크 (None 가격 방지)
+            dca1_exists = False
+            dca2_exists = False
+            stop_exists = False
+            
+            for order in open_orders:
+                if order.get('price') is None:
+                    continue
+                order_price = order['price']
+                
+                # 1차 DCA 주문 체크
+                if abs(order_price - entry_price * 0.97) < entry_price * 0.001:
+                    dca1_exists = True
+                # 2차 DCA 주문 체크
+                elif abs(order_price - entry_price * 0.94) < entry_price * 0.001:
+                    dca2_exists = True
+                # 손절 주문 체크
+                elif order.get('type') == 'stop_market':
+                    stop_exists = True
+            
+            # DCA 주문 관리 (강화된 모드 - 누락 주문 적극 재등록)
+            actions_taken = []
+            
+            # 초기 진입 상태 - 무조건 1차, 2차 DCA 주문 있어야 함
+            if margin_ratio < 1.5:  
+                if not dca1_exists:
+                    if self._place_single_dca_order(symbol, entry_price, 1, size):
+                        actions_taken.append("1차DCA등록")
+                if not dca2_exists:
+                    if self._place_single_dca_order(symbol, entry_price, 2, size):
+                        actions_taken.append("2차DCA등록")
+                    
+            # 1차 DCA 완료 상태 - 2차 DCA 주문만 있어야 함
+            elif margin_ratio < 2.5:  
+                if dca1_exists:
+                    if self._cancel_dca_orders(symbol, entry_price * 0.97):
+                        actions_taken.append("1차DCA취소")
+                if not dca2_exists:
+                    if self._place_single_dca_order(symbol, entry_price, 2, size):
+                        actions_taken.append("2차DCA등록")
+                    
+            # 2차 DCA 완료 상태 - DCA 주문 모두 정리
+            elif margin_ratio >= 2.5:  
+                if dca1_exists:
+                    if self._cancel_dca_orders(symbol, entry_price * 0.97):
+                        actions_taken.append("1차DCA취소")
+                if dca2_exists:
+                    if self._cancel_dca_orders(symbol, entry_price * 0.94):
+                        actions_taken.append("2차DCA취소")
+            
+            # 특별 케이스: DCA 주문이 전혀 없는 경우 강제 재등록
+            if not dca1_exists and not dca2_exists and margin_ratio < 2.5:
+                print(f"⚠️ {clean_symbol}: DCA 주문 전체 누락 감지 - 강제 재등록")
+                if self._place_single_dca_order(symbol, entry_price, 1, size):
+                    actions_taken.append("1차DCA강제등록")
+                if self._place_single_dca_order(symbol, entry_price, 2, size):
+                    actions_taken.append("2차DCA강제등록")
+                    
+            # 손절 주문 확인 - 항상 있어야 함
+            if not stop_exists:
+                if self._place_stop_order(symbol, entry_price, size):
+                    actions_taken.append("손절등록")
+            
+            # 조용한 로그 - 액션이 있을 때만 출력
+            if actions_taken:
+                stage_name = "초기" if margin_ratio < 1.5 else "1차완료" if margin_ratio < 2.5 else "2차완료"
+                print(f"🔧 {clean_symbol} DCA관리: {stage_name} ({'/'.join(actions_taken)})")
+                
+        except Exception as e:
+            self.logger.error(f"DCA 주문 관리 실패 ({clean_symbol}): {e}")
+            # 에러 메시지도 조용하게 - 로그에만 기록
+    
+    def _get_open_orders_for_symbol(self, symbol):
+        """특정 심볼의 열린 주문 조회"""
+        try:
+            orders = self.private_exchange.fetch_open_orders(symbol)
+            return orders if orders else []
+        except Exception as e:
+            self.logger.error(f"주문 조회 실패 ({symbol}): {e}")
+            return []
+    
+    def _place_single_dca_order(self, symbol, entry_price, stage, base_quantity):
+        """단일 DCA 주문 등록 (조용한 모드)"""
+        try:
+            if stage == 1:
+                dca_price = entry_price * 0.97
+                stage_name = "1차 DCA"
+            elif stage == 2:
+                dca_price = entry_price * 0.94
+                stage_name = "2차 DCA"
+            else:
+                return False
+                
+            balance = self.private_exchange.fetch_balance()
+            free_usdt = balance['USDT']['free']
+            dca_value = free_usdt * 0.01  # 1%
+            dca_quantity = (dca_value * 20) / dca_price  # 20배 레버리지
+            
+            if free_usdt >= dca_value:
+                order = self.private_exchange.create_limit_buy_order(
+                    symbol=symbol,
+                    amount=dca_quantity,
+                    price=dca_price,
+                    params={'leverage': 20}
+                )
+                return True
+            else:
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"DCA 주문 등록 실패: {e}")
+            return False
+    
+    def _place_stop_order(self, symbol, entry_price, size):
+        """손절 주문 등록 (조용한 모드)"""
+        try:
+            stop_price = entry_price * 0.90
+            stop_order = self.private_exchange.create_order(
+                symbol=symbol,
+                type='stop_market',
+                side='sell',
+                amount=size,
+                price=None,
+                params={
+                    'stopPrice': stop_price,
+                    'leverage': 20
+                }
+            )
+            return True
+        except Exception as e:
+            self.logger.error(f"손절 주문 등록 실패: {e}")
+            return False
+    
+    def _cancel_dca_orders(self, symbol, target_price):
+        """특정 가격대의 DCA 주문 취소 (조용한 모드)"""
+        try:
+            orders = self._get_open_orders_for_symbol(symbol)
+            cancelled_count = 0
+            
+            for order in orders:
+                if order.get('price') is None:
+                    continue
+                if abs(order['price'] - target_price) < target_price * 0.001:  # 0.1% 오차 허용
+                    try:
+                        self.private_exchange.cancel_order(order['id'], symbol)
+                        cancelled_count += 1
+                    except Exception as e:
+                        self.logger.error(f"주문 취소 실패: {e}")
+                        
+            return cancelled_count > 0
+        except Exception as e:
+            self.logger.error(f"주문 취소 실패: {e}")
+            return False
+    
+    def _print_dca_orders_summary(self):
+        """DCA 주문 현황 요약 출력"""
+        try:
+            if not self.private_exchange:
+                return
+                
+            # 모든 포지션의 DCA 주문 현황 분석
+            positions = self.private_exchange.fetch_positions()
+            active_positions = [p for p in positions if p['contracts'] > 0]
+            
+            if not active_positions:
+                return
+                
+            print(f"\n🔧 DCA 주문 현황 요약:")
+            print(f"   {'심볼':<8} {'진입단계':<8} {'1차DCA':<8} {'2차DCA':<8} {'손절':<8}")
+            print(f"   {'─'*45}")
+            
+            missing_dca_count = 0
+            total_positions = len(active_positions)
+            
+            for position in active_positions:
+                symbol = position['symbol']
+                clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')[:6]
+                
+                # 마진으로 진입 단계 판별
+                initial_margin = position.get('initialMargin', 0)
+                notional = position.get('notional', 0)
+                entry_price = position.get('entryPrice', 0)
+                
+                if initial_margin > 0 and notional > 0:
+                    expected_initial_margin = notional / 20
+                    margin_ratio = initial_margin / (expected_initial_margin * 0.01) if expected_initial_margin > 0 else 0
+                    
+                    if margin_ratio > 50:  # 비정상 데이터 스킵
+                        continue
+                        
+                    stage = "초기" if margin_ratio < 1.5 else "1차완료" if margin_ratio < 2.5 else "2차완료"
+                else:
+                    stage = "불명"
+                
+                # 주문 현황 체크
+                open_orders = self._get_open_orders_for_symbol(symbol)
+                dca1_exists = False
+                dca2_exists = False
+                stop_exists = False
+                
+                for order in open_orders:
+                    if order.get('price') is None:
+                        continue
+                    order_price = order['price']
+                    
+                    if abs(order_price - entry_price * 0.97) < entry_price * 0.001:
+                        dca1_exists = True
+                    elif abs(order_price - entry_price * 0.94) < entry_price * 0.001:
+                        dca2_exists = True
+                    elif order.get('type') == 'stop_market':
+                        stop_exists = True
+                
+                # DCA 누락 체크
+                expected_dca1 = stage in ["초기"]
+                expected_dca2 = stage in ["초기", "1차완료"]
+                
+                if (expected_dca1 and not dca1_exists) or (expected_dca2 and not dca2_exists):
+                    missing_dca_count += 1
+                
+                # 상태 표시
+                dca1_status = "✅" if dca1_exists else ("⚠️" if expected_dca1 else "➖")
+                dca2_status = "✅" if dca2_exists else ("⚠️" if expected_dca2 else "➖")
+                stop_status = "✅" if stop_exists else "⚠️"
+                
+                print(f"   {clean_symbol:<8} {stage:<8} {dca1_status:<8} {dca2_status:<8} {stop_status:<8}")
+            
+            print(f"   {'─'*45}")
+            if missing_dca_count > 0:
+                print(f"   ⚠️  DCA 누락: {missing_dca_count}/{total_positions}개 포지션")
+                print(f"   🔧 자동 재등록이 진행됩니다...")
+            else:
+                print(f"   ✅ 모든 DCA 주문 정상: {total_positions}개 포지션")
+                
+        except Exception as e:
+            self.logger.error(f"DCA 주문 요약 출력 실패: {e}")
+    
+    def _print_portfolio_table(self, positions):
+        """💎 아름다운 포지션 테이블 출력 (개선된 버전)"""
+        print(f"   {'─'*95}")
+        print(f"   {'순번':<4} {'💼 심볼':<8} {'수익률(x20/x1)':<20} {'수익금액':<12} {'진입가':<12} {'진입금액':<12}")
+        print(f"   {'─'*95}")
+        
+        # 합계 계산을 위한 변수
+        total_pnl = 0.0
+        total_entry_amount = 0.0
+        weighted_leverage_sum = 0.0
+        weighted_original_sum = 0.0
+        
+        # 수익률별 정렬 (높은 수익률 -> 낮은 수익률 순)
+        sorted_positions = sorted(positions.items(), key=lambda x: x[1]['percentage'], reverse=True)
+        
+        for idx, (symbol, pos) in enumerate(sorted_positions, 1):
+            clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
+            
+            # 기존 데이터
+            leverage_percentage = pos['percentage']  # 레버리지 수익률
+            pnl = pos['unrealized_pnl']
+            entry_price = pos.get('entry_price', 0)
+            size = pos.get('size', 0)
+            
+            # 원금 수익률 계산 (레버리지 20배 기준)
+            leverage = 20
+            original_percentage = leverage_percentage / leverage if leverage > 0 else 0
+            
+            # 진입금액 계산 (원금 기준)
+            entry_amount = (entry_price * size) / leverage if leverage > 0 and entry_price > 0 and size > 0 else 0
+            
+            # 합계 누적
+            total_pnl += pnl
+            total_entry_amount += entry_amount
+            weighted_leverage_sum += leverage_percentage * entry_amount
+            weighted_original_sum += original_percentage * entry_amount
+            
+            # 수익률에 따른 색상 및 이모지
+            if leverage_percentage >= 50.0:
+                color = GREEN
+                emoji = "🔥"
+            elif leverage_percentage >= 20.0:
+                color = GREEN
+                emoji = "🚀"
+            elif leverage_percentage >= 5.0:
+                color = GREEN
+                emoji = "✅"
+            elif leverage_percentage >= 0.0:
+                color = "\033[93m"  # 노란색
+                emoji = "📈"
+            elif leverage_percentage >= -10.0:
+                color = "\033[91m"  # 빨간색
+                emoji = "⚠️"
+            else:
+                color = "\033[91m"  # 빨간색
+                emoji = "🔻"
+            
+            # PnL 색상 및 부호
+            pnl_color = GREEN if pnl >= 0 else "\033[91m"
+            pnl_sign = "+" if pnl >= 0 else ""
+            
+            # 원금 수익률 색상
+            orig_color = GREEN if original_percentage >= 0 else "\033[91m"
+            orig_sign = "+" if original_percentage >= 0 else ""
+            
+            # 심볼명 길이 조정 (최대 6자)
+            display_symbol = clean_symbol[:6].ljust(6)
+            
+            # 테이블 출력 - 수익률 통합 포맷
+            combined_return = f"{color}{leverage_percentage:+7.2f}%{RESET}({orig_color}{orig_sign}{original_percentage:5.2f}%{RESET})"
+            print(f"   {idx:2d}   {emoji} {color}{display_symbol}{RESET} "
+                  f"{combined_return:<31} "
+                  f"{pnl_color}{pnl_sign}${pnl:8.2f}{RESET}   "
+                  f"${entry_price:8.4f}   "
+                  f"${entry_amount:8.2f}")
+        
+        # 합계 수익률 계산 (가중평균)
+        avg_leverage_percentage = weighted_leverage_sum / total_entry_amount if total_entry_amount > 0 else 0
+        avg_original_percentage = weighted_original_sum / total_entry_amount if total_entry_amount > 0 else 0
+        
+        # 합계 행 색상
+        total_pnl_color = GREEN if total_pnl >= 0 else "\033[91m"
+        total_pnl_sign = "+" if total_pnl >= 0 else ""
+        
+        avg_leverage_color = GREEN if avg_leverage_percentage >= 0 else "\033[91m"
+        avg_leverage_sign = "+" if avg_leverage_percentage >= 0 else ""
+        
+        avg_original_color = GREEN if avg_original_percentage >= 0 else "\033[91m"
+        avg_original_sign = "+" if avg_original_percentage >= 0 else ""
+        
+        # 합계 행 출력 - 수익률 통합 포맷
+        print(f"   {'─'*95}")
+        combined_avg_return = f"{avg_leverage_color}{avg_leverage_sign}{avg_leverage_percentage:7.2f}%{RESET}({avg_original_color}{avg_original_sign}{avg_original_percentage:5.2f}%{RESET})"
+        print(f"   💰   {'합계':<6} "
+              f"{combined_avg_return:<31} "
+              f"{total_pnl_color}{total_pnl_sign}${total_pnl:8.2f}{RESET}   "
+              f"{'─'*8}   "
+              f"${total_entry_amount:8.2f}")
+        print(f"   {'─'*95}")
+    
+    def run_continuous_scan(self, interval=15):
         """🚀 IP 밴 방지 최고속도 연속 스캔 실행"""
         print("🚀 15분봉 초필살기 전략 연속 스캔 시작 (🔥 실전매매 모드 🔥)")
         print(f"   ⚡ 최적화 스캔 주기: {interval}초 (바이낸스 레이트 리밋 준수)")
@@ -3264,6 +3594,24 @@ class FifteenMinuteMegaStrategy:
                     else:
                         print(f"⚠️ {signal['clean_symbol']} 거래 건너뛰기 (상태: {signal.get('status', 'unknown')})")
                 
+                # 🔥 DCA 매니저 포지션 모니터링 및 청산 체크 (7단계 청산 시스템 사용)
+                if self.dca_manager and HAS_DCA_MANAGER:
+                    try:
+                        # DCA 매니저 상태 검증
+                        if not hasattr(self.dca_manager, 'positions'):
+                            self.logger.debug("DCA 매니저 positions 속성 없음")
+                        elif not isinstance(self.dca_manager.positions, dict):
+                            self.logger.debug(f"DCA 매니저 positions 타입 오류: {type(self.dca_manager.positions)}")
+                        else:
+                            # 신규 7단계 청산 시스템 사용
+                            self._check_dca_positions_with_api()
+                    except Exception as e:
+                        # 상세한 오류 정보 로깅
+                        import traceback
+                        self.logger.error(f"DCA 매니저 트리거 체크 실패: {e}")
+                        self.logger.debug(f"DCA 매니저 오류 상세: {traceback.format_exc()}")
+                        print(f"⚠️ DCA 매니저 일시 오류 (다음 스캔에서 재시도)")
+                
                 # 실제 포지션 상태 체크 (DCA 주문 체결 확인)
                 self.check_real_position_status()
                 
@@ -3275,13 +3623,13 @@ class FifteenMinuteMegaStrategy:
                 print(f"   📊 미실현 PnL: ${portfolio['total_unrealized_pnl']:+.0f} USDT")
                 print(f"   🎯 포지션수: {portfolio['open_positions']}개")
                 if portfolio['open_positions'] > 0:
-                    print(f"   🔍 활성 포지션:")
-                    for symbol, pos in portfolio['positions'].items():
-                        clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
-                        print(f"      • {clean_symbol}: {pos['percentage']:+.2f}% (${pos['unrealized_pnl']:+.0f})")
+                    self._print_portfolio_table(portfolio['positions'])
+                
+                # DCA 주문 현황 요약 출력
+                self._print_dca_orders_summary()
                 
                 # 동적 대기 시간 계산
-                effective_interval = max(interval, 30)  # 최소 30초 대기
+                effective_interval = interval  # 사용자 설정 간격 사용
                 if api_call_tracker['calls_in_minute'] > 600:  # 75% 도달시 더 긴 대기
                     effective_interval = interval * 1.5
                 
@@ -3310,6 +3658,366 @@ class FifteenMinuteMegaStrategy:
                     print("❌ 연결 복구 실패 - 60초 대기")
                     time.sleep(60)
 
+    def run_websocket_enhanced_scan(self, strategy_interval=15, dca_interval=1):
+        """🚀 웹소켓 기반 이중 스캔: 전략신호(15초) + DCA모니터링(1초)"""
+        print("🚀 웹소켓 기반 이중 스캔 시스템 시작")
+        print(f"   📊 전략 신호 탐지: {strategy_interval}초 주기 (API 사용)")
+        print(f"   ⚡ DCA 포지션 모니터링: {dca_interval}초 주기 (WebSocket 사용)")
+        print(f"   🛡️ IP 밴 방지: WebSocket 데이터로 API 호출 최소화")
+        
+        # WebSocket 데이터 제공자 확인
+        if not (HAS_WEBSOCKET_PROVIDER and self.ws_provider):
+            print("❌ WebSocket 제공자가 없습니다. 기본 스캔으로 전환합니다.")
+            return self.run_continuous_scan(strategy_interval)
+        
+        # 초기 포트폴리오 상태
+        try:
+            portfolio = self.get_portfolio_summary()
+            print(f"   💰 현재 잔고: ${portfolio['free_balance']:.0f} USDT")
+            print(f"   📊 총 자산: ${portfolio['total_balance']:.0f} USDT")
+            print(f"   🎯 활성 포지션: {portfolio['open_positions']}개")
+        except Exception as e:
+            print(f"⚠️ 포트폴리오 조회 실패: {e}")
+        
+        # API 호출 추적
+        api_call_tracker = {
+            'calls_in_minute': 0,
+            'max_calls_per_minute': 800,
+            'last_minute_reset': time.time()
+        }
+        
+        # 마지막 전략 스캔 시간 추적
+        last_strategy_scan = 0
+        scan_count = 0
+        
+        print(f"\n{'='*80}")
+        print("🔥 웹소켓 기반 이중 스캔 루프 시작 🔥")
+        print(f"{'='*80}")
+        
+        while True:
+            try:
+                current_time = time.time()
+                scan_count += 1
+                
+                # API 호출 수 리셋 (매분)
+                if current_time - api_call_tracker['last_minute_reset'] >= 60:
+                    api_call_tracker['calls_in_minute'] = 0
+                    api_call_tracker['last_minute_reset'] = current_time
+                
+                # 1. 전략 신호 탐지 (15초마다 API 사용)
+                if current_time - last_strategy_scan >= strategy_interval:
+                    print(f"\n{'='*60}")
+                    print(f"📈 전략 스캔 #{scan_count//strategy_interval}: {get_korea_time().strftime('%H:%M:%S')}")
+                    
+                    # API 호출 제한 체크
+                    if api_call_tracker['calls_in_minute'] >= api_call_tracker['max_calls_per_minute']:
+                        wait_time = 60 - (current_time - api_call_tracker['last_minute_reset'])
+                        if wait_time > 0:
+                            print(f"⚠️ API 제한 대기: {wait_time:.0f}초")
+                            time.sleep(wait_time)
+                            api_call_tracker['calls_in_minute'] = 0
+                            api_call_tracker['last_minute_reset'] = time.time()
+                    
+                    # 전략 신호 스캔
+                    signals = self.scan_symbols_optimized(api_call_tracker)
+                    for signal in signals:
+                        if signal.get('status') == 'entry_signal':
+                            if self.execute_trade(signal):
+                                print(f"✅ {signal['clean_symbol']} 진입 완료")
+                    
+                    last_strategy_scan = current_time
+                
+                # 🔧 DCA Exchange 재연결 요청 처리
+                if hasattr(self, '_request_exchange_reconnect') and self._request_exchange_reconnect:
+                    print(f"🔄 DCA Manager로부터 Exchange 재연결 요청 받음")
+                    try:
+                        if self.dca_manager and self.private_exchange:
+                            reconnect_success = self.dca_manager.refresh_exchange_connection(self.private_exchange)
+                            if reconnect_success:
+                                print(f"✅ DCA Exchange 재연결 성공")
+                            else:
+                                print(f"❌ DCA Exchange 재연결 실패")
+                        self._request_exchange_reconnect = False
+                    except Exception as reconnect_error:
+                        print(f"❌ Exchange 재연결 처리 실패: {reconnect_error}")
+                        self._request_exchange_reconnect = False
+
+                # 2. DCA 포지션 모니터링 (1초마다 WebSocket 사용)
+                if self.dca_manager and HAS_DCA_MANAGER:
+                    try:
+                        # WebSocket 기반 실시간 가격으로 DCA 체크
+                        self._check_dca_positions_websocket()
+                    except Exception as dca_error:
+                        if scan_count % 60 == 0:  # 1분마다 한 번만 로그
+                            print(f"⚠️ DCA 모니터링 오류: {dca_error}")
+                
+                # 상태 출력 (10초마다)
+                if scan_count % 10 == 0:
+                    active_positions = len([p for p in (self.dca_manager.positions.values() if self.dca_manager else []) if getattr(p, 'is_active', False)])
+                    print(f"⚡ 스캔 #{scan_count} | DCA 포지션: {active_positions}개 | API: {api_call_tracker['calls_in_minute']}/분")
+                
+                # 1초 대기
+                time.sleep(dca_interval)
+                
+            except KeyboardInterrupt:
+                print("\n👋 사용자에 의해 중단됨")
+                break
+            except Exception as e:
+                self.logger.error(f"웹소켓 스캔 오류: {e}")
+                print(f"❌ 오류: {e}")
+                time.sleep(5)  # 오류 발생시 5초 대기
+    
+    def _check_dca_positions_websocket(self):
+        """웹소켓 데이터 기반 DCA 포지션 실시간 모니터링"""
+        try:
+            if not self.dca_manager:
+                return
+            
+            active_positions = {
+                symbol: position for symbol, position in self.dca_manager.positions.items()
+                if position.is_active
+            }
+            
+            if not active_positions:
+                return
+            
+            # 웹소켓에서 실시간 가격 조회 (API 호출 없음)
+            for symbol, position in active_positions.items():
+                try:
+                    # 웹소켓 캐시에서 현재가 조회
+                    ticker_data = self.ws_provider.get_ticker(symbol)
+                    if not ticker_data or 'last' not in ticker_data:
+                        continue
+                    
+                    current_price = float(ticker_data['last'])
+                    
+                    # DCA 청산 트리거 체크 (웹소켓 + BB80>BB600 수동청산 조건)
+                    dca_result = self.dca_manager.check_dca_triggers(symbol, current_price)
+                    
+                    # dca_result가 유효한 딕셔너리인지 확인
+                    if dca_result and isinstance(dca_result, dict) and dca_result.get('trigger_activated'):
+                        action = dca_result.get('action', 'unknown')
+                        trigger_info = dca_result.get('trigger_info', {})
+                        manual_exit = dca_result.get('manual_exit', False)
+                        
+                        clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
+                        
+                        # 수동청산 전환 신호 처리 (BB80 > BB600 조건)
+                        if manual_exit and action == 'manual_exit_required':
+                            profit_pct = trigger_info.get('profit_pct', 0)
+                            bb80_upper = trigger_info.get('bb80_upper', 0)
+                            bb600_upper = trigger_info.get('bb600_upper', 0)
+                            reason = trigger_info.get('reason', '')
+                            
+                            print(f"\n🎯 {clean_symbol} 수동청산 전환 신호 (웹소켓):")
+                            print(f"   💰 현재가: ${current_price:.6f}")
+                            print(f"   📈 원금수익률: {profit_pct:.2f}% (≥5%)")
+                            print(f"   📊 BB80 상단: ${bb80_upper:.6f}")
+                            print(f"   📊 BB600 상단: ${bb600_upper:.6f}")
+                            print(f"   🎯 조건: {reason}")
+                            print(f"   ⚠️  수동 청산 권장 (자동청산 비활성화)")
+                            
+                            continue  # 수동청산 신호는 실제 청산하지 않고 알림만
+                        
+                        # 수익 보호 청산 신호 처리 (6-10% 구간 → 5% 보호)
+                        if action == 'profit_protection_executed':
+                            max_profit_pct = trigger_info.get('max_profit_pct', 0)
+                            current_profit_pct = trigger_info.get('current_profit_pct', 0)
+                            protection_line_pct = trigger_info.get('protection_line_pct', 5)
+                            reason = trigger_info.get('reason', '')
+                            
+                            print(f"\n💰 {clean_symbol} 수익 보호 청산 실행 (웹소켓):")
+                            print(f"   💰 현재가: ${current_price:.6f}")
+                            print(f"   📈 최대 수익률: {max_profit_pct:.2f}% (≥6%)")
+                            print(f"   📉 현재 수익률: {current_profit_pct:.2f}%")
+                            print(f"   🛡️  보호선: {protection_line_pct:.0f}%")
+                            print(f"   🎯 사유: {reason}")
+                            print(f"   ✅ 전량 청산으로 5% 수익 보장")
+                            
+                            continue  # 보호 청산 완료됨
+                        
+                        # 기존 자동 청산 신호 처리
+                        exit_type = dca_result.get('exit_type', 'unknown')
+                        exit_ratio = dca_result.get('exit_ratio', 0)
+                        current_price_from_signal = dca_result.get('current_price', current_price)
+                        reason = dca_result.get('reason', 'unknown reason')
+                        
+                        print(f"\n🔥 DCA 청산 신호 (웹소켓): {clean_symbol}")
+                        print(f"   📊 타입: {exit_type}")
+                        print(f"   💰 현재가: ${current_price:.4f}")
+                        print(f"   📉 청산비율: {exit_ratio*100:.0f}%")
+                        print(f"   🎯 사유: {reason}")
+                        if isinstance(trigger_info, dict):
+                            for key, value in trigger_info.items():
+                                print(f"   📋 {key}: {value}")
+                        
+                        # 실제 청산 실행 (수동청산 신호가 아닌 경우만)
+                        try:
+                            execute_result = self.dca_manager.execute_new_exit(symbol, dca_result)
+                            if execute_result and execute_result.get('success'):
+                                print(f"   ✅ 청산 실행 완료")
+                            else:
+                                print(f"   ❌ 청산 실행 실패: {execute_result.get('error', 'unknown error')}")
+                        except Exception as exec_error:
+                            if "apiKey" in str(exec_error):
+                                print(f"   ❌ 청산 실행 실패: API 키가 설정되지 않았습니다")
+                                print(f"   📋 해결방법: binance_config.py에서 API 키와 시크릿 키를 설정해주세요")
+                            else:
+                                print(f"   ❌ 청산 실행 오류: {exec_error}")
+                        
+                except Exception as pos_error:
+                    # 개별 포지션 오류는 조용히 처리 (로그만)
+                    self.logger.debug(f"포지션 체크 오류 {symbol}: {pos_error}")
+                    continue
+        
+        except Exception as e:
+            self.logger.error(f"웹소켓 DCA 체크 실패: {e}")
+    
+    def _check_dca_positions_with_api(self):
+        """API 기반 DCA 포지션 실시간 모니터링 (일반 스캔용)"""
+        try:
+            if not self.dca_manager:
+                return
+            
+            # 포지션 데이터 타입 검증 및 안전한 필터링
+            active_positions = {}
+            for symbol, position in self.dca_manager.positions.items():
+                try:
+                    # position이 딕셔너리 또는 DCAPosition 객체인지 확인
+                    if hasattr(position, 'is_active'):
+                        # DCAPosition 객체인 경우
+                        if position.is_active:
+                            active_positions[symbol] = position
+                    elif isinstance(position, dict):
+                        # 딕셔너리인 경우
+                        if position.get('is_active', False):
+                            active_positions[symbol] = position
+                    # 문자열이나 다른 타입은 무시
+                except Exception as pos_err:
+                    self.logger.debug(f"포지션 데이터 타입 오류 {symbol}: {type(position)} - {pos_err}")
+                    continue
+            
+            if not active_positions:
+                return
+            
+            # API에서 실시간 가격 조회
+            for symbol, position in active_positions.items():
+                try:
+                    # API에서 현재가 조회
+                    ticker = self.exchange.fetch_ticker(symbol)
+                    current_price = float(ticker['last'])
+                    
+                    # DCA 청산 트리거 체크 (7단계 청산 시스템 + BB80>BB600 수동청산 조건)
+                    dca_result = self.dca_manager.check_dca_triggers(symbol, current_price)
+                    
+                    # dca_result가 유효한 딕셔너리인지 확인
+                    if dca_result and isinstance(dca_result, dict) and dca_result.get('trigger_activated'):
+                        action = dca_result.get('action', 'unknown')
+                        trigger_info = dca_result.get('trigger_info', {})
+                        manual_exit = dca_result.get('manual_exit', False)
+                        
+                        clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
+                        
+                        # 수동청산 전환 신호 처리 (BB80 > BB600 조건)
+                        if manual_exit and action == 'manual_exit_required':
+                            profit_pct = trigger_info.get('profit_pct', 0)
+                            bb80_upper = trigger_info.get('bb80_upper', 0)
+                            bb600_upper = trigger_info.get('bb600_upper', 0)
+                            reason = trigger_info.get('reason', '')
+                            
+                            print(f"\n🎯 {clean_symbol} 수동청산 전환 신호:")
+                            print(f"   💰 현재가: ${current_price:.6f}")
+                            print(f"   📈 원금수익률: {profit_pct:.2f}% (≥5%)")
+                            print(f"   📊 BB80 상단: ${bb80_upper:.6f}")
+                            print(f"   📊 BB600 상단: ${bb600_upper:.6f}")
+                            print(f"   🎯 조건: {reason}")
+                            print(f"   ⚠️  수동 청산 권장 (자동청산 비활성화)")
+                            
+                            # 텔레그램 알림
+                            if hasattr(self, 'telegram_bot') and self.telegram_bot:
+                                alert_message = f"""🎯 <b>{clean_symbol}</b> 수동청산 전환 신호
+━━━━━━━━━━━━━━━━━━━━━━
+💰 현재가: ${current_price:.6f}
+📈 원금수익률: <b>{profit_pct:.2f}%</b> (≥5%)
+📊 BB80 상단: ${bb80_upper:.6f}
+📊 BB600 상단: ${bb600_upper:.6f}
+━━━━━━━━━━━━━━━━━━━━━━
+🎯 조건: {reason}
+⚠️ <b>수동 청산 권장</b>
+🚨 자동청산 일시 중단
+🕒 시간: {get_korea_time().strftime('%H:%M:%S')}"""
+                                self.telegram_bot.send_message(alert_message)
+                            
+                            continue  # 수동청산 신호는 실제 청산하지 않고 알림만
+                        
+                        # 수익 보호 청산 신호 처리 (6-10% 구간 → 5% 보호)
+                        if action == 'profit_protection_executed':
+                            max_profit_pct = trigger_info.get('max_profit_pct', 0)
+                            current_profit_pct = trigger_info.get('current_profit_pct', 0)
+                            protection_line_pct = trigger_info.get('protection_line_pct', 5)
+                            reason = trigger_info.get('reason', '')
+                            
+                            print(f"\n💰 {clean_symbol} 수익 보호 청산 실행:")
+                            print(f"   💰 현재가: ${current_price:.6f}")
+                            print(f"   📈 최대 수익률: {max_profit_pct:.2f}% (≥6%)")
+                            print(f"   📉 현재 수익률: {current_profit_pct:.2f}%")
+                            print(f"   🛡️  보호선: {protection_line_pct:.0f}%")
+                            print(f"   🎯 사유: {reason}")
+                            print(f"   ✅ 전량 청산으로 5% 수익 보장")
+                            
+                            # 텔레그램 알림
+                            if hasattr(self, 'telegram_bot') and self.telegram_bot:
+                                alert_message = f"""💰 <b>{clean_symbol}</b> 수익 보호 청산 완료
+━━━━━━━━━━━━━━━━━━━━━━
+💰 현재가: ${current_price:.6f}
+📈 최대 수익률: <b>{max_profit_pct:.2f}%</b>
+📉 현재 수익률: {current_profit_pct:.2f}%
+🛡️ 보호선: <b>{protection_line_pct:.0f}%</b>
+━━━━━━━━━━━━━━━━━━━━━━
+🎯 {reason}
+✅ <b>전량 청산으로 5% 수익 확보</b>
+🕒 시간: {get_korea_time().strftime('%H:%M:%S')}"""
+                                self.telegram_bot.send_message(alert_message)
+                            
+                            continue  # 보호 청산 완료됨
+                        
+                        # 기존 자동 청산 신호 처리
+                        exit_type = dca_result.get('exit_type', 'unknown')
+                        exit_ratio = dca_result.get('exit_ratio', 0)
+                        current_price_from_signal = dca_result.get('current_price', current_price)
+                        reason = dca_result.get('reason', 'unknown reason')
+                        
+                        print(f"\n🔥 DCA 청산 신호: {clean_symbol}")
+                        print(f"   📊 타입: {exit_type}")
+                        print(f"   💰 현재가: ${current_price:.4f}")
+                        print(f"   📉 청산비율: {exit_ratio*100:.0f}%")
+                        print(f"   🎯 사유: {reason}")
+                        if isinstance(trigger_info, dict):
+                            for key, value in trigger_info.items():
+                                print(f"   📋 {key}: {value}")
+                        
+                        # 실제 청산 실행 (수동청산 신호가 아닌 경우만)
+                        try:
+                            execute_result = self.dca_manager.execute_new_exit(symbol, dca_result)
+                            if execute_result and execute_result.get('success'):
+                                print(f"   ✅ 청산 실행 완료")
+                            else:
+                                print(f"   ❌ 청산 실행 실패: {execute_result.get('error', 'unknown error')}")
+                        except Exception as exec_error:
+                            if "apiKey" in str(exec_error):
+                                print(f"   ❌ 청산 실행 실패: API 키가 설정되지 않았습니다")
+                                print(f"   📋 해결방법: binance_config.py에서 API 키와 시크릿 키를 설정해주세요")
+                            else:
+                                print(f"   ❌ 청산 실행 오류: {exec_error}")
+                        
+                except Exception as pos_error:
+                    # 개별 포지션 오류는 조용히 처리 (로그만)
+                    self.logger.debug(f"포지션 체크 오류 {symbol}: {pos_error}")
+                    continue
+        
+        except Exception as e:
+            self.logger.error(f"API DCA 체크 실패: {e}")
+
 def main():
     """🚀 Alpha-Z Triple Strategy 메인 함수"""
     import sys
@@ -3319,18 +4027,22 @@ def main():
         print("="*60)
         
         # 명령행 인수 처리
-        mode = 'single'  # 기본값: 단일 스캔
-        interval = 30    # 기본값: 30초 간격 (최적화)
+        mode = 'continuous'  # 기본값: 연속 스캔으로 변경
+        interval = 15    # 기본값: 15초 간격 (최적화 - WebSocket 활용)
         
         if len(sys.argv) > 1:
-            if sys.argv[1] in ['continuous', 'cont', 'c']:
+            if sys.argv[1] in ['single', 'once', 's']:
+                mode = 'single'
+            elif sys.argv[1] in ['continuous', 'cont', 'c']:
                 mode = 'continuous'
+            elif sys.argv[1] in ['websocket', 'ws', 'w']:
+                mode = 'websocket'  # 새로운 웹소켓 모드
             if len(sys.argv) > 2:
                 try:
                     interval = int(sys.argv[2])
-                    interval = max(30, min(600, interval))  # 30초~10분 제한
+                    interval = max(10, min(600, interval))  # 10초~10분 제한 (WebSocket 최적화)
                 except:
-                    interval = 30
+                    interval = 15
         
         # Alpha-Z Triple Strategy 초기화 (A전략+B전략+C전략, 실전매매 모드)
         strategy = FifteenMinuteMegaStrategy(sandbox=False)
@@ -3343,24 +4055,30 @@ def main():
         print(f"   미실현 PnL: ${portfolio['total_unrealized_pnl']:+.0f} USDT")
         print(f"   활성 포지션: {portfolio['open_positions']}개")
         if portfolio['open_positions'] > 0:
-            print(f"   기존 포지션:")
-            for symbol, pos in portfolio['positions'].items():
-                clean_symbol = symbol.replace('/USDT:USDT', '')
-                print(f"      • {clean_symbol}: {pos['percentage']:+.2f}% (${pos['unrealized_pnl']:+.0f})")
+            strategy._print_portfolio_table(portfolio['positions'])
         
-        if mode == 'continuous':
+        if mode == 'websocket':
+            # 웹소켓 기반 이중 스캔 모드
+            print(f"\n🚀 웹소켓 이중 스캔 모드 시작")
+            print(f"   📊 전략 신호: {interval}초 주기 (API)")
+            print(f"   ⚡ DCA 모니터링: 1초 주기 (WebSocket)")
+            print(f"   🛡️ IP 밴 위험 최소화")
+            print(f"   ⚠️ 중단: Ctrl+C")
+            strategy.run_websocket_enhanced_scan(strategy_interval=interval, dca_interval=1)
+        elif mode == 'continuous':
             # 연속 스캔 모드 (IP 밴 방지 최적화)
             print(f"\n연속 스캔 모드 시작 (IP 밴 방지 최적화)")
             print(f"   ⚡ 스캔 간격: {interval}초")
             print(f"   🛡️ 바이낸스 레이트 리밋 준수")
-            print(f"   📊 사용법: python alpha_z_triple_strategy.py continuous [간격초]")
+            print(f"   📊 단일 스캔: python alpha_z_triple_strategy.py single")
+            print(f"   🚀 웹소켓 모드: python alpha_z_triple_strategy.py websocket")
             print(f"   ⚠️ 중단: Ctrl+C")
             strategy.run_continuous_scan(interval)
         else:
             # 단일 스캔 모드 (기본값)
             print(f"\n단일 스캔 모드 (최고속도 최적화)")
             print(f"   ⚡ IP 밴 방지 최적화 적용")
-            print(f"   📊 연속 모드: python alpha_z_triple_strategy.py continuous")
+            print(f"   📊 기본값은 연속 모드입니다")
             
             # API 호출 추적기 초기화
             api_call_tracker = {
@@ -3383,6 +4101,30 @@ def main():
                             print(f"✅ {signal['clean_symbol']} 진입 완료")
                     else:
                         print(f"⚠️ {signal['clean_symbol']} 거래 건너뛰기 (상태: {signal.get('status', 'unknown')})")
+            
+            # 🔥 DCA 매니저 포지션 모니터링 및 청산 체크 (단일 스캔 모드 통합)
+            if strategy.dca_manager and HAS_DCA_MANAGER:
+                try:
+                    # 현재 잔고 조회 (트리거 계산용)
+                    temp_portfolio = strategy.get_portfolio_summary()
+                    current_balance = temp_portfolio.get('free_balance', 0)
+                    
+                    # 모든 활성 DCA 포지션의 트리거 확인
+                    dca_results = strategy.dca_manager.check_triggers(current_balance)
+                    if dca_results:
+                        for symbol, result in dca_results.items():
+                            if result and result.get('trigger_activated'):
+                                action = result.get('action', 'unknown')
+                                trigger_type = result.get('trigger_info', {}).get('type', '알 수 없음')
+                                print(f"🔄 DCA 트리거 활성: {symbol.replace('/USDT:USDT', '')} - {action} ({trigger_type})")
+                                
+                                # 청산 트리거인 경우 텔레그램 알림
+                                if action in ['stop_loss_executed', 'supertrend_exit_executed', 'technical_exit_executed']:
+                                    clean_sym = symbol.replace('/USDT:USDT', '')
+                                    if hasattr(strategy, 'telegram_bot') and strategy.telegram_bot:
+                                        strategy.telegram_bot.send_message(f"🚨 자동청산 실행: {clean_sym}\n유형: {trigger_type}\n액션: {action}")
+                except Exception as e:
+                    print(f"⚠️ DCA 매니저 단일 스캔 트리거 체크 실패: {e}")
             
             # 최종 포지션 상태 체크
             strategy.check_real_position_status()
