@@ -1246,6 +1246,28 @@ class ImprovedDCAPositionManager:
             if not position.is_active:
                 return None
             
+            # 🔄 실제 거래소 포지션 동기화 체크 (포지션 동기화 문제 해결)
+            try:
+                real_positions = self.exchange.fetch_positions([symbol])
+                active_position = None
+                for pos in real_positions:
+                    if pos['symbol'] == symbol and pos['contracts'] > 0:
+                        active_position = pos
+                        break
+                
+                if not active_position:
+                    self.logger.warning(f"⚠️ {symbol} DCA 파일에 있지만 실제 거래소 포지션 없음 - 동기화 수행")
+                    # DCA 파일에서 해당 포지션을 비활성화
+                    position.is_active = False
+                    position.current_stage = "closing"
+                    position.last_update = get_korea_time().isoformat()
+                    self.save_data()
+                    self.logger.info(f"✅ {symbol} DCA 포지션 비활성화 완료 (실제 포지션 없음)")
+                    return None
+                    
+            except Exception as e:
+                self.logger.warning(f"⚠️ {symbol} 거래소 포지션 동기화 확인 실패: {e} - DCA 체크 계속 진행")
+            
             # 🚨 중요: 가격이 None이면 거래소에서 직접 조회 (손절 실패 방지)
             if current_price is None:
                 try:
@@ -3323,6 +3345,22 @@ class ImprovedDCAPositionManager:
     def _check_bb80_bb600_manual_exit(self, symbol: str, current_price: float, profit_pct: float) -> Optional[Dict[str, Any]]:
         """15분봉 BB80 > BB600 조건 + 원금수익률 5% 이상시 수동청산 전환 체크"""
         try:
+            # 실제 거래소 포지션 존재 확인 (중요: 포지션 동기화 문제 해결)
+            try:
+                real_positions = self.exchange.fetch_positions([symbol])
+                active_position = None
+                for pos in real_positions:
+                    if pos['symbol'] == symbol and pos['contracts'] > 0:
+                        active_position = pos
+                        break
+                
+                if not active_position:
+                    self.logger.debug(f"📍 {symbol} 실제 거래소 포지션 없음 - BB80>BB600 체크 스킵")
+                    return None
+                    
+            except Exception as e:
+                self.logger.warning(f"⚠️ {symbol} 거래소 포지션 확인 실패: {e} - BB80>BB600 체크 계속 진행")
+            
             # 원금수익률 5% 이상 조건 확인
             if profit_pct < 0.05:  # 5% 미만이면 조건 미충족
                 return None
@@ -3441,6 +3479,22 @@ class ImprovedDCAPositionManager:
             # 이미 시간 기반 청산이 완료된 경우 스킵
             if position.time_based_exit_done:
                 return None
+            
+            # 실제 거래소 포지션 존재 확인 (중요: 포지션 동기화 문제 해결)
+            try:
+                real_positions = self.exchange.fetch_positions([position.symbol])
+                active_position = None
+                for pos in real_positions:
+                    if pos['symbol'] == position.symbol and pos['contracts'] > 0:
+                        active_position = pos
+                        break
+                
+                if not active_position:
+                    self.logger.debug(f"📍 {position.symbol} 실제 거래소 포지션 없음 - 시간 기반 청산 체크 스킵")
+                    return None
+                    
+            except Exception as e:
+                self.logger.warning(f"⚠️ {position.symbol} 거래소 포지션 확인 실패: {e} - 시간 기반 청산 체크 계속 진행")
             
             # 포지션 생성 시간 파싱
             try:
