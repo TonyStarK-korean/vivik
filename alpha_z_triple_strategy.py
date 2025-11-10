@@ -3502,12 +3502,18 @@ def main():
         print("="*60)
         
         # 명령행 인수 처리
-        mode = 'single'  # 기본값: 단일 스캔
+        mode = 'continuous'  # 기본값: 연속 스캔 (24시간 실행)
         interval = 30    # 기본값: 30초 간격 (최적화)
-        
+
         if len(sys.argv) > 1:
-            if sys.argv[1] in ['continuous', 'cont', 'c']:
+            # single, once, 1 옵션만 단일 스캔 모드
+            if sys.argv[1] in ['single', 'once', '1']:
+                mode = 'single'
+            # 나머지는 모두 연속 스캔 (continuous, cont, c, --scan, scan)
+            elif sys.argv[1] not in ['single', 'once', '1']:
                 mode = 'continuous'
+
+            # 간격 설정 (두 번째 인수)
             if len(sys.argv) > 2:
                 try:
                     interval = int(sys.argv[2])
