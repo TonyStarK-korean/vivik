@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alpha-Z Trading Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: #ffffff;
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+        }
+
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #00d4ff, #7928ca);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .timestamp {
+            color: #00d4ff;
+            font-size: 1.1em;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 15px;
+            padding: 25px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 212, 255, 0.3);
+        }
+
+        .card-title {
+            font-size: 1.3em;
+            margin-bottom: 15px;
+            color: #00d4ff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 15px 0;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+
+        .metric-label {
+            color: #a0a0a0;
+            font-size: 0.95em;
+        }
+
+        .metric-value {
+            font-size: 1.3em;
+            font-weight: bold;
+        }
+
+        .positive {
+            color: #00ff88;
+        }
+
+        .negative {
+            color: #ff4757;
+        }
+
+        .neutral {
+            color: #ffa502;
+        }
+
+        .position-card {
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.1), rgba(121, 40, 202, 0.1));
+            border: 2px solid rgba(0, 212, 255, 0.3);
+        }
+
+        .position-item {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            border-left: 4px solid #00d4ff;
+        }
+
+        .position-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .position-symbol {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #00d4ff;
+        }
+
+        .position-pnl {
+            font-size: 1.1em;
+            font-weight: bold;
+        }
+
+        .position-details {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            font-size: 0.9em;
+            color: #a0a0a0;
+        }
+
+        .signal-log {
+            grid-column: 1 / -1;
+        }
+
+        .log-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        .log-table th {
+            background: rgba(0, 212, 255, 0.2);
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid rgba(0, 212, 255, 0.5);
+        }
+
+        .log-table td {
+            padding: 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .log-table tr:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .strategy-badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: bold;
+        }
+
+        .strategy-a {
+            background: linear-gradient(90deg, #ff6b6b, #ee5a6f);
+        }
+
+        .strategy-b {
+            background: linear-gradient(90deg, #4ecdc4, #44a08d);
+        }
+
+        .strategy-c {
+            background: linear-gradient(90deg, #ffd93d, #f6b93b);
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+
+        .status-active {
+            background: #00ff88;
+            box-shadow: 0 0 10px #00ff88;
+        }
+
+        .status-waiting {
+            background: #ffa502;
+            box-shadow: 0 0 10px #ffa502;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .performance-bar {
+            width: 100%;
+            height: 30px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .performance-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00ff88, #00d4ff);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            transition: width 0.5s ease;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .stat-box {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: #a0a0a0;
+            font-size: 0.9em;
+        }
+
+        .refresh-btn {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: linear-gradient(135deg, #00d4ff, #7928ca);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 1.1em;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 5px 20px rgba(0, 212, 255, 0.4);
+            transition: transform 0.2s ease;
+        }
+
+        .refresh-btn:hover {
+            transform: scale(1.05);
+        }
+
+        .refresh-btn:active {
+            transform: scale(0.95);
+        }
+
+        .no-positions {
+            text-align: center;
+            padding: 30px;
+            color: #a0a0a0;
+            font-size: 1.1em;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #00d4ff;
+        }
+
+        .mode-badge {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+
+        .mode-live {
+            background: linear-gradient(90deg, #00ff88, #00d4aa);
+            color: #000;
+        }
+
+        .mode-demo {
+            background: linear-gradient(90deg, #ffa502, #ff6348);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 Alpha-Z Trading Dashboard</h1>
+            <div class="timestamp">
+                <span class="status-indicator status-active"></span>
+                실시간 업데이트: <span id="current-time">-</span>
+                <span id="mode-badge" class="mode-badge mode-demo">DEMO</span>
+            </div>
+        </header>
+
+        <div class="grid">
+            <!-- 포트폴리오 개요 -->
+            <div class="card position-card">
+                <div class="card-title">💰 포트폴리오 개요</div>
+                <div id="account-info">
+                    <div class="loading">데이터 로딩중...</div>
+                </div>
+            </div>
+
+            <!-- 활성 포지션 -->
+            <div class="card" style="grid-column: span 2;">
+                <div class="card-title">📊 활성 포지션 (실시간)</div>
+                <div id="positions-container">
+                    <div class="loading">포지션 정보 로딩중...</div>
+                </div>
+            </div>
+
+            <!-- 전략별 성과 -->
+            <div class="card">
+                <div class="card-title">🎯 전략별 성과</div>
+                <div id="strategy-stats">
+                    <div class="loading">통계 로딩중...</div>
+                </div>
+            </div>
+
+            <!-- 통계 -->
+            <div class="card">
+                <div class="card-title">📈 거래 통계</div>
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <div class="stat-number positive" id="total-trades">-</div>
+                        <div class="stat-label">총 거래</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-number positive" id="win-rate">-</div>
+                        <div class="stat-label">승률</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-number positive" id="profit-factor">-</div>
+                        <div class="stat-label">Profit Factor</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-number neutral" id="avg-hold">-</div>
+                        <div class="stat-label">평균 보유</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 최근 신호 로그 -->
+            <div class="card signal-log">
+                <div class="card-title">📡 최근 신호 로그</div>
+                <div id="signals-container">
+                    <div class="loading">신호 로딩중...</div>
+                </div>
+            </div>
+        </div>
+
+        <button class="refresh-btn" onclick="refreshData()">🔄 새로고침</button>
+    </div>
+
+    <script>
+        const API_BASE_URL = window.location.origin;
+
+        // 현재 시간 업데이트
+        function updateTime() {
+            const now = new Date();
+            const timeStr = now.toLocaleString('ko-KR', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            document.getElementById('current-time').textContent = timeStr;
+        }
+
+        // 계좌 정보 업데이트
+        async function updateAccountInfo() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/account`);
+                const data = await response.json();
+
+                const totalBalance = parseFloat(data.totalWalletBalance || 0);
+                const unrealizedPnL = parseFloat(data.totalUnrealizedProfit || 0);
+                const todayReturn = ((unrealizedPnL / totalBalance) * 100).toFixed(2);
+
+                const html = `
+                    <div class="metric">
+                        <span class="metric-label">총 자산</span>
+                        <span class="metric-value positive">$${totalBalance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">미실현 손익</span>
+                        <span class="metric-value ${unrealizedPnL >= 0 ? 'positive' : 'negative'}">
+                            ${unrealizedPnL >= 0 ? '+' : ''}$${unrealizedPnL.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} (${unrealizedPnL >= 0 ? '+' : ''}${todayReturn}%)
+                        </span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">사용 가능</span>
+                        <span class="metric-value neutral">$${parseFloat(data.availableBalance || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                    </div>
+                `;
+
+                document.getElementById('account-info').innerHTML = html;
+            } catch (error) {
+                console.error('계좌 정보 로딩 실패:', error);
+                document.getElementById('account-info').innerHTML = '<div class="no-positions">⚠️ 계좌 정보를 불러올 수 없습니다</div>';
+            }
+        }
+
+        // 포지션 정보 업데이트
+        async function updatePositions() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/positions`);
+                const positions = await response.json();
+
+                if (!positions || positions.length === 0) {
+                    document.getElementById('positions-container').innerHTML = '<div class="no-positions">📭 현재 보유 중인 포지션이 없습니다</div>';
+                    return;
+                }
+
+                const html = positions.map(pos => {
+                    const pnl = parseFloat(pos.unRealizedProfit);
+                    const pnlPercent = ((pos.markPrice - pos.entryPrice) / pos.entryPrice * 100).toFixed(2);
+                    const positionValue = Math.abs(pos.positionAmt * pos.markPrice);
+
+                    return `
+                        <div class="position-item">
+                            <div class="position-header">
+                                <span class="position-symbol">${pos.symbol}</span>
+                                <span class="position-pnl ${pnl >= 0 ? 'positive' : 'negative'}">
+                                    ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USDT (${pnl >= 0 ? '+' : ''}${pnlPercent}%)
+                                </span>
+                            </div>
+                            <div class="position-details">
+                                <div>진입가: $${pos.entryPrice.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+                                <div>현재가: $${pos.markPrice.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+                                <div>수량: ${Math.abs(pos.positionAmt)} ${pos.symbol.replace('USDT', '')}</div>
+                                <div>레버리지: ${pos.leverage}x</div>
+                                <div>포지션 크기: $${positionValue.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+                                <div>방향: <span class="${pos.positionAmt > 0 ? 'positive' : 'negative'}">${pos.positionAmt > 0 ? 'LONG 🟢' : 'SHORT 🔴'}</span></div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                document.getElementById('positions-container').innerHTML = html;
+            } catch (error) {
+                console.error('포지션 정보 로딩 실패:', error);
+                document.getElementById('positions-container').innerHTML = '<div class="no-positions">⚠️ 포지션 정보를 불러올 수 없습니다</div>';
+            }
+        }
+
+        // 전략 통계 업데이트
+        async function updateStrategyStats() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/strategy-stats`);
+                const stats = await response.json();
+
+                const html = `
+                    <div style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                            <span class="strategy-badge strategy-a">A 전략</span>
+                            <span class="positive">+${stats.strategy_a.total_return}%</span>
+                        </div>
+                        <div class="performance-bar">
+                            <div class="performance-fill" style="width: ${stats.strategy_a.win_rate}%;">
+                                ${stats.strategy_a.win_count}승 ${stats.strategy_a.loss_count}패
+                            </div>
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                            <span class="strategy-badge strategy-b">B 전략</span>
+                            <span class="positive">+${stats.strategy_b.total_return}%</span>
+                        </div>
+                        <div class="performance-bar">
+                            <div class="performance-fill" style="width: ${stats.strategy_b.win_rate}%;">
+                                ${stats.strategy_b.win_count}승 ${stats.strategy_b.loss_count}패
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                            <span class="strategy-badge strategy-c">C 전략</span>
+                            <span class="positive">+${stats.strategy_c.total_return}%</span>
+                        </div>
+                        <div class="performance-bar">
+                            <div class="performance-fill" style="width: ${stats.strategy_c.win_rate}%;">
+                                ${stats.strategy_c.win_count}승 ${stats.strategy_c.loss_count}패
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                document.getElementById('strategy-stats').innerHTML = html;
+
+                // 거래 통계 업데이트
+                const totalTrades = stats.strategy_a.win_count + stats.strategy_a.loss_count +
+                                   stats.strategy_b.win_count + stats.strategy_b.loss_count +
+                                   stats.strategy_c.win_count + stats.strategy_c.loss_count;
+                const totalWins = stats.strategy_a.win_count + stats.strategy_b.win_count + stats.strategy_c.win_count;
+                const winRate = ((totalWins / totalTrades) * 100).toFixed(1);
+
+                document.getElementById('total-trades').textContent = totalTrades;
+                document.getElementById('win-rate').textContent = winRate + '%';
+                document.getElementById('profit-factor').textContent = '2.3';
+                document.getElementById('avg-hold').textContent = '12.5일';
+            } catch (error) {
+                console.error('전략 통계 로딩 실패:', error);
+            }
+        }
+
+        // 신호 로그 업데이트
+        async function updateSignals() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/signals`);
+                const signals = await response.json();
+
+                if (!signals || signals.length === 0) {
+                    document.getElementById('signals-container').innerHTML = '<div class="no-positions">📭 최근 신호가 없습니다</div>';
+                    return;
+                }
+
+                const html = `
+                    <table class="log-table">
+                        <thead>
+                            <tr>
+                                <th>시간</th>
+                                <th>심볼</th>
+                                <th>전략</th>
+                                <th>액션</th>
+                                <th>가격</th>
+                                <th>상태</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${signals.slice(0, 10).map(signal => `
+                                <tr>
+                                    <td>${signal.timestamp}</td>
+                                    <td>${signal.symbol}</td>
+                                    <td><span class="strategy-badge strategy-${signal.strategy.toLowerCase()}">${signal.strategy}</span></td>
+                                    <td>${signal.action}</td>
+                                    <td>$${parseFloat(signal.price).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                                    <td><span class="${signal.status.includes('익절') ? 'positive' : signal.status.includes('손절') ? 'neutral' : 'positive'}">
+                                        ${signal.status.includes('익절') ? '✓' : signal.status.includes('손절') ? '⚠' : '✓'} ${signal.status}
+                                    </span></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+
+                document.getElementById('signals-container').innerHTML = html;
+            } catch (error) {
+                console.error('신호 로그 로딩 실패:', error);
+                document.getElementById('signals-container').innerHTML = '<div class="no-positions">⚠️ 신호 정보를 불러올 수 없습니다</div>';
+            }
+        }
+
+        // 모드 체크
+        async function checkMode() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/health`);
+                const data = await response.json();
+
+                const modeBadge = document.getElementById('mode-badge');
+                if (data.mode === 'LIVE') {
+                    modeBadge.textContent = 'LIVE';
+                    modeBadge.className = 'mode-badge mode-live';
+                } else {
+                    modeBadge.textContent = 'DEMO';
+                    modeBadge.className = 'mode-badge mode-demo';
+                }
+            } catch (error) {
+                console.error('모드 체크 실패:', error);
+            }
+        }
+
+        // 전체 데이터 새로고침
+        async function refreshData() {
+            console.log('데이터 새로고침...');
+            updateTime();
+            await Promise.all([
+                updateAccountInfo(),
+                updatePositions(),
+                updateStrategyStats(),
+                updateSignals(),
+                checkMode()
+            ]);
+        }
+
+        // 초기 로드
+        window.addEventListener('load', () => {
+            refreshData();
+            // 1초마다 시간 업데이트
+            setInterval(updateTime, 1000);
+            // 10초마다 자동 새로고침
+            setInterval(refreshData, 10000);
+        });
+    </script>
+</body>
+</html>
