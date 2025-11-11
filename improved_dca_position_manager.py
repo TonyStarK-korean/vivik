@@ -113,6 +113,16 @@ class DCAPosition:
     trailing_stop_high: float = 0.0  # Trailing 스탑 Highest price 추적
     trailing_stop_percentage: float = 0.05  # Trailing 스탑 비율 (5%)
 
+    # Pyramid (불타기) 관련 필드
+    pyramid_count: int = 0              # 현재 불타기 횟수 (0, 1, 2)
+    pyramid_stage: str = 'initial'       # 불타기 단계 (initial, pyramid_1, pyramid_2)
+    pyramid_highest_price: float = 0.0   # 진입 이후 최고가 추적
+    pyramid_last_peak_time: str = ""     # 최고점 도달 시간
+    pyramid_1_executed: bool = False     # 1차 불타기 실행 여부
+    pyramid_2_executed: bool = False     # 2차 불타기 실행 여부
+    pyramid_1_entry_time: str = ""       # 1차 불타기 진입 시간
+    pyramid_2_entry_time: str = ""       # 2차 불타기 진입 시간
+
 class ImprovedDCAPositionManager:
     """count선된 Cyclic trading수 Position Admin"""
     
@@ -147,23 +157,41 @@ class ImprovedDCAPositionManager:
         self.advanced_exit_system = None  # 고급 Exit 시스템 (미구현)
         self.basic_exit_system = None     # 기본 Exit 시스템 (미구현)
         
-        # Settings (Fixed 1.5% Entry with NO DCA - 추가매수 없이 고정 진입, 레버리지 10배)
+        # Settings (Pyramid Entry - 상승 눌림목 불타기 시스템, 레버리지 10배)
         self.config = {
-            # DCA Entry Settings (DCA 비활성화 - 추가매수 없음)
-            'initial_weight': 0.015,      # 최초 Entry 비중 (1.5%) - 전체 비중의 1.5%
+            # 초기 Entry Settings
+            'initial_weight': 0.010,      # 최초 Entry 비중 (1.0%) - 불타기 여유 확보
             'initial_leverage': 10.0,     # 최초 Entry 레버리지 (10배)
-            'first_dca_trigger': -99.0,   # 1차 Add매수 트리거 (비활성화)
-            'first_dca_weight': 0.025,    # 1차 Add매수 비중 (비활성화)
-            'first_dca_leverage': 10.0,   # 1차 Add매수 레버리지 (비활성화)
-            'second_dca_trigger': -99.0,  # 2차 Add매수 트리거 (비활성화)
-            'second_dca_weight': 0.025,   # 2차 Add매수 비중 (비활성화)
-            'second_dca_leverage': 10.0,  # 2차 Add매수 레버리지 (비활성화)
 
-            # Stage별 손절 기준 (고정 -3% 손절)
+            # Pyramid (불타기) Settings - 상승 눌림목에서만 실행
+            'pyramid_enabled': True,      # 불타기 활성화
+            'max_pyramid_count': 2,       # 최대 불타기 횟수 (2회)
+
+            # 1차 불타기 조건
+            'pyramid_1_rise_min': 0.015,  # 진입 후 최소 +1.5% 상승 필요 (원금 기준)
+            'pyramid_1_pullback_min': 0.008,  # 최고점 대비 최소 -0.8% 눌림 (원금 기준)
+            'pyramid_1_pullback_max': 0.012,  # 최고점 대비 최대 -1.2% 눌림 (원금 기준)
+            'pyramid_1_weight': 0.005,    # 1차 불타기 비중 (0.5%)
+            'pyramid_1_leverage': 10.0,   # 1차 불타기 레버리지 (10배)
+            'pyramid_1_timeout': 1800,    # 1차 불타기 타임아웃 (30분)
+
+            # 2차 불타기 조건
+            'pyramid_2_rise_min': 0.010,  # 1차 이후 최소 +1.0% 추가 상승 (원금 기준)
+            'pyramid_2_pullback_min': 0.008,  # 최고점 대비 최소 -0.8% 눌림 (원금 기준)
+            'pyramid_2_pullback_max': 0.010,  # 최고점 대비 최대 -1.0% 눌림 (원금 기준)
+            'pyramid_2_weight': 0.005,    # 2차 불타기 비중 (0.5%)
+            'pyramid_2_leverage': 10.0,   # 2차 불타기 레버리지 (10배)
+            'pyramid_2_timeout': 1200,    # 2차 불타기 타임아웃 (20분)
+            'pyramid_2_profit_min': 0.020, # 2차 실행 최소 총 수익률 +2.0%
+
+            # 불타기 금지 조건
+            'pyramid_stop_loss_trigger': -0.020,  # 최고점 대비 -2.0% 이상 하락 시 불타기 금지
+
+            # Stage별 손절 기준 (평균가 기준 -3% 손절)
             'stop_loss_by_stage': {
                 'initial': -0.03,      # 초기 Entry: -3% 전량 손절
-                'first_dca': -0.03,    # 1차 DCA 후: -3% 손절 (미사용)
-                'second_dca': -0.03    # 2차 DCA 후: -3% 손절 (미사용)
+                'pyramid_1': -0.03,    # 1차 불타기 후: -3% 손절 (평균가 기준)
+                'pyramid_2': -0.03     # 2차 불타기 후: -3% 손절 (평균가 기준)
             },
 
             # 수익 Exit 전략 (Trailing Stop 방식)
@@ -1066,7 +1094,25 @@ class ImprovedDCAPositionManager:
             profit_exit_result = self._check_profit_exit_triggers(position, current_price, profit_pct)
             if profit_exit_result:
                 return profit_exit_result
-            
+
+            # 2.5. 불타기 기회 Confirm (수익 중 추가 진입)
+            pyramid_result = self.check_pyramid_opportunity(position, current_price)
+            if pyramid_result and pyramid_result.get('signal'):
+                # 불타기 실행
+                success = self.execute_pyramid_entry(symbol, pyramid_result)
+                if success:
+                    return {
+                        'trigger_activated': True,
+                        'action': 'pyramid_entry_executed',
+                        'trigger_info': {
+                            'type': '불타기 진입',
+                            'stage': pyramid_result['stage'],
+                            'entry_price': pyramid_result['current_price'],
+                            'highest_price': pyramid_result['highest_price'],
+                            'pullback_pct': pyramid_result['pullback_pct']
+                        }
+                    }
+
             # 3. DCA Add매수 Confirm
             dca_result = self._check_dca_triggers(position, current_price, total_balance, profit_pct)
             if dca_result:
@@ -1175,6 +1221,274 @@ class ImprovedDCAPositionManager:
                     }
                 }
             return None
+
+    def check_pyramid_opportunity(self, position: DCAPosition, current_price: float) -> Optional[Dict[str, Any]]:
+        """
+        불타기 기회 확인
+        상승 후 눌림목에서 추가 매수 판단
+        """
+        try:
+            if not self.config.get('pyramid_enabled', False):
+                return None
+
+            # 최고점 갱신
+            if current_price > position.pyramid_highest_price:
+                position.pyramid_highest_price = current_price
+                position.pyramid_last_peak_time = get_korea_time().isoformat()
+
+            # 최대 불타기 횟수 체크
+            max_count = self.config.get('max_pyramid_count', 2)
+            if position.pyramid_count >= max_count:
+                return None
+
+            # 불타기 금지 조건: 최고점 대비 급락
+            stop_trigger = self.config.get('pyramid_stop_loss_trigger', -0.020)
+            if position.pyramid_highest_price > 0:
+                drop_from_peak = (current_price - position.pyramid_highest_price) / position.pyramid_highest_price
+                if drop_from_peak <= stop_trigger:
+                    return None
+
+            # 현재 수익률 계산
+            current_profit = (current_price - position.initial_entry_price) / position.initial_entry_price
+
+            # 1차 불타기 체크
+            if not position.pyramid_1_executed:
+                return self._check_pyramid_1_conditions(position, current_price, current_profit)
+
+            # 2차 불타기 체크
+            if not position.pyramid_2_executed and position.pyramid_1_executed:
+                return self._check_pyramid_2_conditions(position, current_price, current_profit)
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"불타기 기회 확인 실패: {e}")
+            return None
+
+    def _check_pyramid_1_conditions(self, position: DCAPosition, current_price: float, current_profit: float) -> Optional[Dict[str, Any]]:
+        """1차 불타기 조건 체크"""
+        try:
+            # 1. 상승 확인: 진입 후 최소 +1.5% 이상
+            rise_min = self.config.get('pyramid_1_rise_min', 0.015)
+            if position.pyramid_highest_price <= 0:
+                return None
+
+            rise_from_entry = (position.pyramid_highest_price - position.initial_entry_price) / position.initial_entry_price
+            if rise_from_entry < rise_min:
+                return None
+
+            # 2. 눌림목 확인: 최고점 대비 -0.8% ~ -1.2%
+            pullback_min = self.config.get('pyramid_1_pullback_min', 0.008)
+            pullback_max = self.config.get('pyramid_1_pullback_max', 0.012)
+
+            pullback = (position.pyramid_highest_price - current_price) / position.pyramid_highest_price
+            if not (pullback_min <= pullback <= pullback_max):
+                return None
+
+            # 3. 여전히 수익 상태 확인
+            if current_profit < 0.003:  # 최소 +0.3% 수익
+                return None
+
+            # 4. 타임아웃 체크
+            timeout = self.config.get('pyramid_1_timeout', 1800)
+            from datetime import datetime
+            entry_time = datetime.fromisoformat(position.created_at)
+            current_time = get_korea_time()
+            elapsed = (current_time - entry_time).total_seconds()
+            if elapsed > timeout:
+                return None
+
+            # 불타기 신호 반환
+            return {
+                'signal': True,
+                'stage': 'pyramid_1',
+                'current_price': current_price,
+                'highest_price': position.pyramid_highest_price,
+                'rise_pct': rise_from_entry * 100,
+                'pullback_pct': pullback * 100,
+                'current_profit_pct': current_profit * 100,
+                'weight': self.config.get('pyramid_1_weight', 0.005)
+            }
+
+        except Exception as e:
+            self.logger.error(f"1차 불타기 조건 체크 실패: {e}")
+            return None
+
+    def _check_pyramid_2_conditions(self, position: DCAPosition, current_price: float, current_profit: float) -> Optional[Dict[str, Any]]:
+        """2차 불타기 조건 체크"""
+        try:
+            # 1차 불타기 이후 최고점 기준으로 판단
+            if not position.pyramid_1_entry_time:
+                return None
+
+            from datetime import datetime
+            pyramid_1_time = datetime.fromisoformat(position.pyramid_1_entry_time)
+
+            # 1. 1차 이후 추가 상승 확인: +1.0% 이상
+            rise_min = self.config.get('pyramid_2_rise_min', 0.010)
+
+            # 1차 진입 후 최고점까지 상승률 (평균가 기준)
+            rise_since_pyramid_1 = (position.pyramid_highest_price - position.average_price) / position.average_price
+            if rise_since_pyramid_1 < rise_min:
+                return None
+
+            # 2. 눌림목 확인: 최고점 대비 -0.8% ~ -1.0%
+            pullback_min = self.config.get('pyramid_2_pullback_min', 0.008)
+            pullback_max = self.config.get('pyramid_2_pullback_max', 0.010)
+
+            pullback = (position.pyramid_highest_price - current_price) / position.pyramid_highest_price
+            if not (pullback_min <= pullback <= pullback_max):
+                return None
+
+            # 3. 총 수익률 확인: 최소 +2.0% 이상
+            profit_min = self.config.get('pyramid_2_profit_min', 0.020)
+            if current_profit < profit_min:
+                return None
+
+            # 4. 타임아웃 체크
+            timeout = self.config.get('pyramid_2_timeout', 1200)
+            current_time = get_korea_time()
+            elapsed = (current_time - pyramid_1_time).total_seconds()
+            if elapsed > timeout:
+                return None
+
+            # 불타기 신호 반환
+            return {
+                'signal': True,
+                'stage': 'pyramid_2',
+                'current_price': current_price,
+                'highest_price': position.pyramid_highest_price,
+                'rise_pct': rise_since_pyramid_1 * 100,
+                'pullback_pct': pullback * 100,
+                'current_profit_pct': current_profit * 100,
+                'weight': self.config.get('pyramid_2_weight', 0.005)
+            }
+
+        except Exception as e:
+            self.logger.error(f"2차 불타기 조건 체크 실패: {e}")
+            return None
+
+    def execute_pyramid_entry(self, symbol: str, pyramid_signal: Dict[str, Any]) -> bool:
+        """
+        불타기 실행
+        상승 눌림목에서 추가 매수
+        """
+        try:
+            position = self.positions.get(symbol)
+            if not position or not position.is_active:
+                return False
+
+            stage = pyramid_signal['stage']
+            current_price = pyramid_signal['current_price']
+            weight = pyramid_signal['weight']
+
+            self.logger.info(f"🔥 [{symbol}] {stage} 불타기 실행!")
+            self.logger.info(f"   최고점: ${pyramid_signal['highest_price']:.6f} (+{pyramid_signal['rise_pct']:.2f}%)")
+            self.logger.info(f"   현재가: ${current_price:.6f} (눌림: -{pyramid_signal['pullback_pct']:.2f}%)")
+            self.logger.info(f"   현재 수익: +{pyramid_signal['current_profit_pct']:.2f}%")
+
+            # 잔고 조회
+            balance = self.exchange.fetch_balance()
+            free_usdt = balance['USDT']['free']
+
+            # 추가 포지션 계산
+            leverage = self.config.get('pyramid_1_leverage' if stage == 'pyramid_1' else 'pyramid_2_leverage', 10.0)
+            notional = free_usdt * weight * leverage
+            quantity = notional / current_price
+
+            # 최소 주문 수량 체크
+            market = self.exchange.market(symbol)
+            min_amount = market['limits']['amount']['min']
+            if quantity < min_amount:
+                self.logger.warning(f"   ⚠️ 최소 주문 수량 미달: {quantity:.6f} < {min_amount:.6f}")
+                return False
+
+            # 시장가 매수
+            order = self.exchange.create_market_buy_order(
+                symbol=symbol,
+                amount=quantity,
+                params={'leverage': int(leverage)}
+            )
+
+            if order and order.get('status') == 'closed':
+                filled_price = float(order.get('average', current_price))
+                filled_qty = float(order.get('filled', quantity))
+
+                # 평균가 업데이트
+                old_notional = position.total_notional
+                old_quantity = position.total_quantity
+                new_notional = old_notional + (filled_price * filled_qty)
+                new_quantity = old_quantity + filled_qty
+                new_avg_price = new_notional / new_quantity
+
+                position.average_price = new_avg_price
+                position.total_quantity = new_quantity
+                position.total_notional = new_notional
+                position.pyramid_count += 1
+                position.pyramid_stage = stage
+                position.last_update = get_korea_time().isoformat()
+
+                if stage == 'pyramid_1':
+                    position.pyramid_1_executed = True
+                    position.pyramid_1_entry_time = get_korea_time().isoformat()
+                elif stage == 'pyramid_2':
+                    position.pyramid_2_executed = True
+                    position.pyramid_2_entry_time = get_korea_time().isoformat()
+
+                # Entry 기록 추가
+                entry = DCAEntry(
+                    stage=stage,
+                    price=filled_price,
+                    quantity=filled_qty,
+                    notional=filled_price * filled_qty,
+                    timestamp=get_korea_time().isoformat()
+                )
+                position.entries.append(entry)
+
+                # 저장
+                self.save_data()
+
+                self.logger.info(f"   ✅ {stage} 불타기 완료!")
+                self.logger.info(f"   체결가: ${filled_price:.6f}")
+                self.logger.info(f"   수량: {filled_qty:.6f}")
+                self.logger.info(f"   신규 평균가: ${new_avg_price:.6f}")
+                self.logger.info(f"   총 포지션: {new_quantity:.6f}")
+
+                # 텔레그램 알림
+                if self.telegram_bot:
+                    clean_symbol = symbol.replace('/USDT:USDT', '')
+                    message = f"""🔥 불타기 실행 완료!
+
+📊 {clean_symbol}
+━━━━━━━━━━━━━━━━
+🎯 단계: {stage}
+💰 체결가: ${filled_price:.6f}
+📈 최고점: ${pyramid_signal['highest_price']:.6f}
+📉 눌림: -{pyramid_signal['pullback_pct']:.2f}%
+💵 수량: {filled_qty:.6f}
+
+📊 포지션 정보:
+   • 평균가: ${new_avg_price:.6f}
+   • 총 수량: {new_quantity:.6f}
+   • 불타기: {position.pyramid_count}/2회
+   • 현재 수익: +{pyramid_signal['current_profit_pct']:.2f}%
+
+⚠️ 리스크 관리:
+   • 손절: ${new_avg_price * 0.97:.6f} (-3%)
+   • 익절: Trailing Stop (2-3%)
+"""
+                    self.telegram_bot.send_message(message)
+
+                return True
+            else:
+                self.logger.error(f"   ❌ 불타기 주문 실패")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"불타기 실행 실패: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return False
 
     def _check_profit_exit_triggers(self, position: DCAPosition, current_price: float, profit_pct: float) -> Optional[Dict[str, Any]]:
         """수익 Exit 트리거 Confirm - 커스텀 Trailing Stop 최우선 적용"""
