@@ -5,19 +5,21 @@ A전략(15분봉 바닥타점) + B전략(15분봉 급등초입) + C전략(3분�
 
 거래 설정:
 - 레버리지: 20배
-- 포지션 크기: 원금 1.0% x 20배 레버리지 (20% 노출)
+- 포지션 크기: 원금 1.5% x 20배 레버리지 (30% 노출) - 고정 진입
 - 최대 진입 종목: 10종목
 - 재진입: 순환매 활성화 (최대 3회 순환매)
-- 단계별 손절: 초기 -10% (시드 대비 6% 손실)
-- 종목당 최대 비중: 3.0% (초기 1.0% + DCA 1.0% + 1.0%)
-- 최대 원금 사용: 30% (10종목 × 3.0%)
-- 손실 계산: 총 3% × 20배 × -10% = 시드의 6% 손실
+- 손절: 진입가 대비 -3% 전량 손절 (시드 대비 0.9% 손실)
+- 종목당 최대 비중: 1.5% (추가매수 없음)
+- 최대 원금 사용: 15% (10종목 × 1.5%)
+- 손실 계산: 1.5% × 20배 × -3% = 시드의 0.9% 손실
 
-DCA 시스템:
-- 최초 진입: 1.0% x 20배 = 20% 노출 시장가 매수
-- 1차 DCA: -3% 하락가에 1.0% x 20배 지정가 주문 (즉시 등록)
-- 2차 DCA: -6% 하락가에 1.0% x 20배 지정가 주문 (즉시 등록)
-- 전량 손절: -10% (시드 대비 6% 손실)
+청산 시스템 (DCA 비활성화):
+- 최초 진입: 1.5% x 20배 = 30% 노출 시장가 매수 (추가매수 없음)
+- 손절: 진입가 대비 -3% 전량 손절
+- 이익실현: Trailing Stop 방식
+  * 2-3% 수익 도달 시 추적 시작
+  * 최고점 대비 1.5% 하락 시 손실 전환 전 전량 청산
+  * 예: 2.5% 수익 도달 → 2.0%로 하락 시 청산 (1.0% 이익 확보)
 
 전략 조건:
 A전략(15분봉 바닥타점): 5개 조건 - (ma80<ma480 and ma5<ma480) and BB복합조건 및 골든크로스 and 시가대비고가조건
@@ -2876,8 +2878,8 @@ class FifteenMinuteMegaStrategy:
             market = self.private_exchange.market(symbol)
             min_amount = market['limits']['amount']['min'] if market['limits']['amount']['min'] else 0
             
-            # 포지션 크기 계산 (1% x 20배 레버리지)
-            position_value = free_usdt * 0.01  # 1%
+            # 포지션 크기 계산 (1.5% x 20배 레버리지, DCA 없음)
+            position_value = free_usdt * 0.015  # 1.5% (고정 진입)
             leverage = 20
             quantity = (position_value * leverage) / price  # 실제 구매할 수량
             
@@ -2896,7 +2898,7 @@ class FifteenMinuteMegaStrategy:
 ⚠️ 실패사유: 잔고 부족
 ━━━━━━━━━━━━━━━━━━━━━━
 📊 레버리지: 20배
-📈 목표진입: {position_value:.0f} USDT (1.0%)
+📈 목표진입: {position_value:.0f} USDT (1.5%)
 🕒 시간: {get_korea_time().strftime('%H:%M:%S')}"""
                 self._send_notification_once(symbol, "balance_insufficient", detailed_msg)
                 return False
@@ -2917,7 +2919,7 @@ class FifteenMinuteMegaStrategy:
 ⚠️ 실패사유: 최소 주문 수량 미달
 ━━━━━━━━━━━━━━━━━━━━━━
 📊 레버리지: 20배
-📈 목표진입: {position_value:.0f} USDT (1.0%)
+📈 목표진입: {position_value:.0f} USDT (1.5%)
 🕒 시간: {get_korea_time().strftime('%H:%M:%S')}"""
                 self._send_notification_once(symbol, "min_amount_insufficient", detailed_msg)
                 return False
@@ -2994,10 +2996,9 @@ class FifteenMinuteMegaStrategy:
    • 포지션수: {portfolio['open_positions']}개
    • 총 PnL: ${portfolio['total_unrealized_pnl']:+.0f} USDT
 ━━━━━━━━━━━━━━━━━━━━━━
-🎯 자동 DCA 설정:
-   • 1차: ${filled_price * 0.97:,.4f} (-3%)
-   • 2차: ${filled_price * 0.94:,.4f} (-6%)
-   • 손절: ${filled_price * 0.90:,.4f} (-10%)
+🎯 청산 설정 (DCA 비활성화):
+   • 손절: ${filled_price * 0.97:,.4f} (-3% 전량)
+   • 익절: Trailing Stop (2-3% 최고점 추적)
 ⚠️ 실제 거래 - 리스크 관리 필수!"""
                 self._send_notification_once(symbol, "entry_success", message)
                 
@@ -3011,7 +3012,7 @@ class FifteenMinuteMegaStrategy:
 ━━━━━━━━━━━━━━━━━━━━━━
 🎯 전략: {strategy_type}
 💰 진입가격: ${price:.4f}
-💵 투입금액: ${position_value:.0f} USDT (1.0%)
+💵 투입금액: ${position_value:.0f} USDT (1.5%)
 ⚠️ 실패사유: 주문 처리 실패
 📋 오류정보: {order.get('info', '상세정보없음')}
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -3030,7 +3031,7 @@ class FifteenMinuteMegaStrategy:
 ━━━━━━━━━━━━━━━━━━━━━━
 🎯 전략: {strategy_type}
 💰 진입가격: ${price:.4f}
-💵 투입금액: ${(free_usdt * 0.01):.0f} USDT (1.0%)
+💵 투입금액: ${(free_usdt * 0.015):.0f} USDT (1.5%)
 ⚠️ 실패사유: 시스템 오류
 📋 오류정보: {str(e)[:100]}
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -3040,18 +3041,18 @@ class FifteenMinuteMegaStrategy:
             return False
     
     def _place_dca_orders(self, symbol, entry_price, base_quantity):
-        """DCA 주문 등록 (-3%, -6%)"""
+        """DCA 주문 등록 (비활성화됨 - DCA 트리거가 -99%로 설정되어 실행되지 않음)"""
         try:
             clean_symbol = symbol.replace('/USDT:USDT', '')
             dca_orders = []
-            
-            # 1차 DCA: -3% 가격에 1% 추가 매수
+
+            # 1차 DCA: -3% 가격에 1.5% 추가 매수 (비활성화)
             dca1_price = entry_price * 0.97
             balance = self.private_exchange.fetch_balance()
             free_usdt = balance['USDT']['free']
-            dca1_value = free_usdt * 0.01  # 1%
+            dca1_value = free_usdt * 0.015  # 1.5%
             dca1_quantity = (dca1_value * 20) / dca1_price  # 20배 레버리지
-            
+
             if free_usdt >= dca1_value:
                 try:
                     dca1_order = self.exchange.create_limit_buy_order(
@@ -3069,10 +3070,10 @@ class FifteenMinuteMegaStrategy:
                     print(f"   📋 1차 DCA 주문 등록: ${dca1_price:,.4f} ({dca1_quantity:.6f})")
                 except Exception as e:
                     print(f"   ⚠️ 1차 DCA 주문 실패: {e}")
-            
-            # 2차 DCA: -6% 가격에 1% 추가 매수
+
+            # 2차 DCA: -6% 가격에 1.5% 추가 매수 (비활성화)
             dca2_price = entry_price * 0.94
-            dca2_value = free_usdt * 0.01  # 1%
+            dca2_value = free_usdt * 0.015  # 1.5%
             dca2_quantity = (dca2_value * 20) / dca2_price  # 20배 레버리지
             
             if free_usdt >= dca2_value:
@@ -3093,14 +3094,14 @@ class FifteenMinuteMegaStrategy:
                 except Exception as e:
                     print(f"   ⚠️ 2차 DCA 주문 실패: {e}")
             
-            # 손절 주문: -10%
-            stop_price = entry_price * 0.90
+            # 손절 주문: -3% (전량 손절)
+            stop_price = entry_price * 0.97
             try:
                 stop_order = self.exchange.create_order(
                     symbol=symbol,
                     type='stop_market',
                     side='sell',
-                    amount=base_quantity,  # 기본 포지션만 손절
+                    amount=base_quantity,  # 전량 손절
                     price=None,
                     params={
                         'stopPrice': stop_price,
@@ -3113,7 +3114,7 @@ class FifteenMinuteMegaStrategy:
                     'quantity': base_quantity,
                     'order_id': stop_order['id']
                 })
-                print(f"   🛑 손절 주문 등록: ${stop_price:,.4f}")
+                print(f"   🛑 손절 주문 등록: ${stop_price:,.4f} (-3%)")
             except Exception as e:
                 print(f"   ⚠️ 손절 주문 실패: {e}")
             

@@ -1,16 +1,55 @@
-# 바이낸스 자동 매매 봇 (1분봉 급등 진입 전략)
+# 바이낸스 자동 매매 봇 (Alpha-Z Trading System)
 
-자동화된 암호화폐 선물 거래 봇 (전략 C, D, DCA 시스템 포함)
+자동화된 암호화폐 선물 거래 봇 (Strategy C + D 복합 전략, 고급 DCA 시스템)
 
-## 주요 기능
+## 📊 주요 기능
 
-- ✅ 1분봉 기반 급등 진입 전략
-- ✅ SuperTrend(10-3) + 이동평균 복합 전략
-- ✅ DCA(Dollar Cost Averaging) 시스템
-- ✅ WebSocket 실시간 데이터 수신
-- ✅ 5가지 청산 방법 (본절보호, SuperTrend, BB600 등)
-- ✅ 텔레그램 알림 지원
-- ✅ Rate Limiter 및 IP 밴 방지
+### 🎯 진입 전략
+- ✅ **Strategy C**: 3분봉 시세 초입 포착 전략
+  - BB200-BB480 골든크로스 (200봉 이내)
+  - MA5-MA20 패턴 조건
+  - 3분봉 SuperTrend(10-3) 진입 시그널
+- ✅ **Strategy D**: 5분봉 초강력 타점 전략
+  - 15분봉 MA80 < MA480
+  - 5분봉 SuperTrend(10-3) 진입 시그널
+  - MA80-MA480 골든크로스 또는 이격도 5% 이내
+  - MA480 우하향 + BB200 상단선 골든크로스
+  - 10봉 이내 MA5-MA20 골든크로스
+- ✅ **1분봉 진입 타이밍**: MA5-MA120 골든크로스 또는 이격도 조건
+- ✅ **4시간봉 필터링**: 3% 이상 급등 확인
+
+### 💰 포지션 관리
+- ✅ **초기 진입**: 자본의 0.8% × 레버리지 10배
+- ✅ **1차 DCA**: -3% 하락 시 자본의 2% × 레버리지 10배 (지정가 자동 등록)
+- ✅ **2차 DCA**: -6% 하락 시 자본의 2.5% × 레버리지 10배 (지정가 자동 등록)
+- ✅ **최대 포지션**: 10종목 동시 보유
+- ✅ **종목당 최대 비중**: 5.3% (모든 DCA 포함)
+
+### 📉 청산 시스템 (5가지 방법)
+1. **SuperTrend 청산**: 3분봉 SuperTrend 매도 신호 시 즉시 전량 청산
+2. **단계별 청산**: 손실 구간에서 평단가 최적화를 위한 부분 청산
+3. **수익 구간 청산**: 10% 수익 또는 BB600 상단 돌파 시 50% 청산
+4. **적응형 손절**: 단계별 변동성 기반 손절
+   - 초기 진입: -10%
+   - 1차 DCA 후: -7%
+   - 2차 DCA 후: -5%
+5. **트레일링 스톱**: 수익률별 차등 하락 허용
+   - 20% 이상: 15% 하락 허용
+   - 15~20%: 20% 하락 허용
+   - 10~15%: 25% 하락 허용
+   - 5~10%: 50% 하락 시 전량 청산
+   - 3~5%: 손실 전환 직전 청산
+
+### ⚡ 시스템 최적화
+- ✅ **WebSocket 실시간 데이터**: 레이턴시 0.05초 (REST 대비 36배 향상)
+- ✅ **병렬 처리**: 521개 심볼 5-10초 내 스캔 완료
+- ✅ **캐시 시스템**: OHLCV 데이터 1200초 캐싱
+- ✅ **텔레그램 알림**: 진입/청산/DCA 체결 실시간 알림
+- ✅ **Rate Limiter**: IP 밴 방지 시스템
+
+## 📖 상세 문서
+
+전략 조건, DCA 시스템, 청산 로직 등 상세한 내용은 [TRADING_SYSTEM_DOCUMENTATION.md](TRADING_SYSTEM_DOCUMENTATION.md)를 참고하세요.
 
 ## VPS 설치 가이드
 
@@ -140,15 +179,25 @@ sudo systemctl start trading-bot
 sudo systemctl status trading-bot
 ```
 
-## 필수 파일
+## 핵심 파일 구조
 
-- `one_minute_surge_entry_strategy.py` - 메인 전략 파일
+### 전략 실행 파일
+- `one_minute_surge_entry_strategy.py` - 메인 전략 파일 (Strategy C + D)
+- `alpha_z_triple_strategy.py` - Triple 전략 (A, B, C)
+
+### 시스템 구성 파일
+- `improved_dca_position_manager.py` - 고급 DCA 포지션 관리
 - `indicators.py` - 기술적 지표 계산
 - `cache_manager.py` - 캐시 관리
 - `bulk_websocket_kline_manager.py` - WebSocket 관리
 - `websocket_defense_system.py` - WebSocket 방어 시스템
 - `binance_websocket_kline_manager.py` - 바이낸스 WebSocket
 - `binance_rate_limiter.py` - Rate Limiter
+
+### 문서 파일
+- `TRADING_SYSTEM_DOCUMENTATION.md` - 전체 시스템 상세 문서
+- `DCA_SYSTEM_IMPROVEMENTS.md` - DCA 시스템 개선 내역
+- `WEBSOCKET_OPTIMIZATION_GUIDE.md` - WebSocket 최적화 가이드
 
 ## 보안 주의사항
 
@@ -158,11 +207,34 @@ sudo systemctl status trading-bot
 - `telegram_config.py` - Git에서 제외됨
 - VPS에서 직접 설정 파일 생성 필요
 
-## 성능 최적화
+## 성능 지표
 
-- WebSocket: 0 API calls/min (bootstrap 후)
-- 레이턴시: 0.05초 (REST 대비 36배 향상)
-- 가격 캡처율: 100% (실시간)
+- **WebSocket**: 0 API calls/min (bootstrap 후)
+- **레이턴시**: 0.05초 (REST 대비 36배 향상)
+- **가격 캡처율**: 100% (실시간)
+- **스캔 속도**: 521개 심볼 5-10초 내 처리
+
+## 운영 가이드
+
+### 시작 전 체크리스트
+1. ✅ API 키 설정 확인
+2. ✅ 텔레그램 봇 토큰 설정
+3. ✅ 자본금 설정 확인
+4. ✅ WebSocket 연결 확인
+
+### 위험 관리
+- 최대 10개 포지션 제한
+- 포지션당 최대 5.3% 자본 투입 (모든 DCA 포함)
+- 단계별 손절 시스템 활성화 (-10% / -7% / -5%)
+- 수익 구간별 트레일링 스톱
+
+## ⚠️ 주의사항
+
+1. **실거래 전 시뮬레이션 권장**
+2. **네트워크 안정성 필수**
+3. **자본금 대비 적정 포지션 유지**
+4. **정기적인 로그 모니터링**
+5. **급변동 시장에서 주의 운영**
 
 ## 문의
 

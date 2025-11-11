@@ -147,28 +147,32 @@ class ImprovedDCAPositionManager:
         self.advanced_exit_system = None  # 고급 Exit 시스템 (미구현)
         self.basic_exit_system = None     # 기본 Exit 시스템 (미구현)
         
-        # Settings (Current 2% Entry Status에 맞춘 조정)
+        # Settings (Fixed 1.5% Entry with NO DCA - 추가매수 없이 고정 진입)
         self.config = {
-            # DCA Entry Settings
-            'initial_weight': 0.020,      # 최초 Entry 비중 (2.0%) - 실제 Entry 반영
+            # DCA Entry Settings (DCA 비활성화 - 추가매수 없음)
+            'initial_weight': 0.015,      # 최초 Entry 비중 (1.5%) - 전체 비중의 1.5%
             'initial_leverage': 10.0,     # 최초 Entry 레버리지
-            'first_dca_trigger': -0.03,   # 1차 Add매수 트리거 (-3%)
-            'first_dca_weight': 0.025,    # 1차 Add매수 비중 (2.5%) - 최초 vs 1.25배
-            'first_dca_leverage': 10.0,   # 1차 Add매수 레버리지
-            'second_dca_trigger': -0.06,  # 2차 Add매수 트리거 (-6%)
-            'second_dca_weight': 0.025,   # 2차 Add매수 비중 (2.5%) - 최초 vs 1.25배
-            'second_dca_leverage': 10.0,  # 2차 Add매수 레버리지
+            'first_dca_trigger': -99.0,   # 1차 Add매수 트리거 (비활성화)
+            'first_dca_weight': 0.025,    # 1차 Add매수 비중 (비활성화)
+            'first_dca_leverage': 10.0,   # 1차 Add매수 레버리지 (비활성화)
+            'second_dca_trigger': -99.0,  # 2차 Add매수 트리거 (비활성화)
+            'second_dca_weight': 0.025,   # 2차 Add매수 비중 (비활성화)
+            'second_dca_leverage': 10.0,  # 2차 Add매수 레버리지 (비활성화)
 
-            # Stage별 손절 기준 (옵션C)
+            # Stage별 손절 기준 (고정 -3% 손절)
             'stop_loss_by_stage': {
-                'initial': -0.10,      # 초기 Entry: -10% 손절
-                'first_dca': -0.07,    # 1차 DCA 후: -7% 손절
-                'second_dca': -0.05    # 2차 DCA 후: -5% 손절
+                'initial': -0.03,      # 초기 Entry: -3% 전량 손절
+                'first_dca': -0.03,    # 1차 DCA 후: -3% 손절 (미사용)
+                'second_dca': -0.03    # 2차 DCA 후: -3% 손절 (미사용)
             },
 
-            # 수익 Exit 전략
-            'mid_profit_threshold': 0.05,   # 5% 중간 수익 기준
-            'half_profit_threshold': 0.10,  # 10% 절반 Exit 기준
+            # 수익 Exit 전략 (Trailing Stop 방식)
+            'trailing_stop_enabled': True,       # Trailing Stop 활성화
+            'trailing_profit_peak_min': 0.02,    # 최소 수익 2% 이상 도달 시 추적 시작
+            'trailing_profit_peak_max': 0.03,    # 최대 수익 3% 기준
+            'trailing_stop_drawdown': 0.015,     # 최고점 대비 1.5% 하락 시 전량 청산
+            'mid_profit_threshold': 0.05,        # 5% 중간 수익 기준 (미사용)
+            'half_profit_threshold': 0.10,       # 10% 절반 Exit 기준 (미사용)
             
             # 시스템 Settings
             'max_dca_stages': 2,            # 최대 Add매수 Stage
@@ -1173,8 +1177,57 @@ class ImprovedDCAPositionManager:
             return None
 
     def _check_profit_exit_triggers(self, position: DCAPosition, current_price: float, profit_pct: float) -> Optional[Dict[str, Any]]:
-        """수익 Exit 트리거 Confirm - SuperClaude 기본 Exit 시스템 우선 적용"""
+        """수익 Exit 트리거 Confirm - 커스텀 Trailing Stop 최우선 적용"""
         try:
+            # 🎯 커스텀 Trailing Stop 로직 (최우선)
+            if self.config.get('trailing_stop_enabled', False):
+                trailing_min = self.config.get('trailing_profit_peak_min', 0.02)  # 2%
+                trailing_max = self.config.get('trailing_profit_peak_max', 0.03)  # 3%
+                trailing_drawdown = self.config.get('trailing_stop_drawdown', 0.015)  # 1.5%
+
+                # 최고점 추적 시작 조건: 2-3% 수익 달성
+                if profit_pct >= trailing_min:
+                    # 최고점 갱신
+                    if current_price > position.trailing_stop_high:
+                        position.trailing_stop_high = current_price
+                        position.trailing_stop_active = True
+
+                        # 최고 수익률 기록
+                        if profit_pct > position.max_profit_pct:
+                            position.max_profit_pct = profit_pct
+                            self.logger.info(f"📈 {position.symbol} 최고 수익률 갱신: {profit_pct:.2f}% (${current_price:.6f})")
+
+                    # Trailing Stop 체크: 최고점 대비 하락 감지
+                    if position.trailing_stop_active and position.trailing_stop_high > 0:
+                        drawdown_from_peak = (position.trailing_stop_high - current_price) / position.trailing_stop_high
+
+                        # 최고점 대비 1.5% 이상 하락 시 전량 청산
+                        if drawdown_from_peak >= trailing_drawdown:
+                            # 현재 수익률 계산
+                            current_profit = (current_price - position.average_price) / position.average_price
+
+                            # 손실 전환 전에만 청산 (현재 수익이 플러스일 때만)
+                            if current_profit > 0:
+                                self.logger.critical(f"🚨 {position.symbol} Trailing Stop 발동!")
+                                self.logger.critical(f"   최고점: ${position.trailing_stop_high:.6f} (최고 수익률: {position.max_profit_pct:.2f}%)")
+                                self.logger.critical(f"   현재가: ${current_price:.6f} (현재 수익률: {current_profit*100:.2f}%)")
+                                self.logger.critical(f"   최고점 대비 하락: {drawdown_from_peak*100:.2f}%")
+
+                                success = self._execute_emergency_exit(position, current_price, "custom_trailing_stop")
+
+                                return {
+                                    'trigger_activated': True,
+                                    'action': 'custom_trailing_stop_executed' if success else 'custom_trailing_stop_failed',
+                                    'trigger_info': {
+                                        'type': '커스텀 Trailing Stop (손실전환 방지)',
+                                        'highest_price': position.trailing_stop_high,
+                                        'max_profit_pct': position.max_profit_pct * 100,
+                                        'current_profit_pct': current_profit * 100,
+                                        'drawdown_from_peak': drawdown_from_peak * 100,
+                                        'current_price': current_price
+                                    }
+                                }
+
             # 🎯 SuperClaude 기본 Exit 시스템 최우선 Usage
             if self.basic_exit_system:
                 basic_exit_signal = self.basic_exit_system.check_all_basic_exits(
