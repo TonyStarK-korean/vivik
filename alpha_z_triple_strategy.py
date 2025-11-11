@@ -34,7 +34,7 @@ A전략(3분봉 바닥급등타점) + B전략(15분봉 급등초입) + C전략(3
   * 예: 2.5% 수익 도달 → 2.0%로 하락 시 청산 (1.0% 이익 확보)
 
 전략 조건:
-A전략(3분봉 바닥급등타점): 4개 조건 - (10봉이내 MA80-MA480 골든크로스 or MA80<MA480) + 15봉이내 BB80-BB480 골든크로스 + 5봉이내 종가<MA5 골든크로스 + 시가대비고가 3%이상
+A전략(3분봉 바닥급등타점): 4개 조건 - (200봉이내 MA80-MA480 골든크로스 or MA80<MA480) + 200봉이내 BB80-BB480 골든크로스 + 60봉이내 MA20-MA80 골든크로스 + 5봉이내 종가<MA5 골든크로스
 B전략(15분봉 급등초입): 6개 조건 - 200봉이내 MA80-MA480 골든크로스 + BB골든크로스 + MA5-MA20골든크로스 + BB200상단-MA480 상향돌파 + MA20-MA80 데드크로스 or 이격도조건 + 시가대비고가 3%이상
 C전략(30분봉 급등맥점): 2개 기본조건 + 3개 타점(A/B/C) - 기본조건(50봉이내 MA80-MA480 골든크로스 or MA80<MA480 + 100봉이내 MA480-BB200 크로스) + A/B/C 타점 중 1개
 """
@@ -1156,14 +1156,14 @@ class FifteenMinuteMegaStrategy:
             except Exception as e:
                 return False, [f"[A전략] 3분봉 데이터 조회 실패: {e}"]
             
-            # 조건 1: 10봉이내 MA80-MA480 골든크로스 or 현재 MA80<MA480
+            # 조건 1: 200봉이내 MA80-MA480 골든크로스 or 현재 MA80<MA480
             condition1 = False
             condition1_detail = "미충족"
             
             try:
-                # 10봉이내 골든크로스 체크
-                if len(df_calc) >= 11:
-                    for i in range(1, min(11, len(df_calc))):
+                # 200봉이내 골든크로스 체크
+                if len(df_calc) >= 201:
+                    for i in range(1, min(201, len(df_calc))):
                         prev_idx = -(i+1)
                         curr_idx = -i
                         
@@ -1192,23 +1192,23 @@ class FifteenMinuteMegaStrategy:
                         condition1 = True
                         condition1_detail = "현재 MA80<MA480"
                         
-                conditions.append(f"[A전략 조건1] MA80-MA480 조건 ({condition1_detail}): {condition1}")
+                conditions.append(f"[A전략 조건1] 200봉이내 MA80-MA480 조건 ({condition1_detail}): {condition1}")
             except Exception as e:
                 conditions.append(f"[A전략 조건1] MA80-MA480 조건 계산 실패: {e}")
                 condition1 = False
             
-            # 조건 2: 15봉이내 BB80-BB480 골든크로스
+            # 조건 2: 200봉이내 BB80-BB480 골든크로스
             condition2 = False
             condition2_detail = "골든크로스 없음"
             
             try:
-                if len(df_calc) >= 16:
+                if len(df_calc) >= 201:
                     # BB80과 BB480 데이터 가져오기
                     bb80_data = df_calc.get('bb80_upper', df_calc.get('bb80', pd.Series()))
                     bb480_data = df_calc.get('bb480_upper', df_calc.get('bb480', pd.Series()))
                     
-                    if len(bb80_data) >= 16 and len(bb480_data) >= 16:
-                        for i in range(1, min(16, len(bb80_data))):
+                    if len(bb80_data) >= 201 and len(bb480_data) >= 201:
+                        for i in range(1, min(201, len(bb80_data))):
                             prev_idx = -(i+1)
                             curr_idx = -i
                             
@@ -1227,14 +1227,44 @@ class FifteenMinuteMegaStrategy:
                                 condition2_detail = f"{i}봉전 BB80-BB480 골든크로스"
                                 break
                                 
-                conditions.append(f"[A전략 조건2] BB80-BB480 골든크로스 ({condition2_detail}): {condition2}")
+                conditions.append(f"[A전략 조건2] 200봉이내 BB80-BB480 골든크로스 ({condition2_detail}): {condition2}")
             except Exception as e:
                 conditions.append(f"[A전략 조건2] BB80-BB480 골든크로스 계산 실패: {e}")
                 condition2 = False
             
-            # 조건 3: 5봉이내 종가<MA5 골든크로스
+            # 조건 3: 60봉이내 MA20-MA80 골든크로스
             condition3 = False
             condition3_detail = "골든크로스 없음"
+            
+            try:
+                if len(df_calc) >= 61:
+                    for i in range(1, min(61, len(df_calc))):
+                        prev_idx = -(i+1)
+                        curr_idx = -i
+                        
+                        if abs(prev_idx) > len(df_calc) or abs(curr_idx) > len(df_calc):
+                            continue
+                            
+                        ma20_prev = df_calc['ma20'].iloc[prev_idx]
+                        ma20_curr = df_calc['ma20'].iloc[curr_idx]
+                        ma80_prev = df_calc['ma80'].iloc[prev_idx]
+                        ma80_curr = df_calc['ma80'].iloc[curr_idx]
+                        
+                        if (pd.notna(ma20_prev) and pd.notna(ma20_curr) and
+                            pd.notna(ma80_prev) and pd.notna(ma80_curr) and
+                            ma20_prev <= ma80_prev and ma20_curr > ma80_curr):
+                            condition3 = True
+                            condition3_detail = f"{i}봉전 MA20-MA80 골든크로스"
+                            break
+                            
+                conditions.append(f"[A전략 조건3] 60봉이내 MA20-MA80 골든크로스 ({condition3_detail}): {condition3}")
+            except Exception as e:
+                conditions.append(f"[A전략 조건3] MA20-MA80 골든크로스 계산 실패: {e}")
+                condition3 = False
+            
+            # 조건 4: 5봉이내 종가<MA5 골든크로스
+            condition4 = False
+            condition4_detail = "골든크로스 없음"
             
             try:
                 if len(df_calc) >= 6:
@@ -1253,37 +1283,13 @@ class FifteenMinuteMegaStrategy:
                         if (pd.notna(close_prev) and pd.notna(close_curr) and
                             pd.notna(ma5_prev) and pd.notna(ma5_curr) and
                             close_prev < ma5_prev and close_curr >= ma5_curr):
-                            condition3 = True
-                            condition3_detail = f"{i}봉전 종가-MA5 골든크로스"
+                            condition4 = True
+                            condition4_detail = f"{i}봉전 종가-MA5 골든크로스"
                             break
                             
-                conditions.append(f"[A전략 조건3] 종가<MA5 골든크로스 ({condition3_detail}): {condition3}")
+                conditions.append(f"[A전략 조건4] 5봉이내 종가<MA5 골든크로스 ({condition4_detail}): {condition4}")
             except Exception as e:
-                conditions.append(f"[A전략 조건3] 종가<MA5 골든크로스 계산 실패: {e}")
-                condition3 = False
-            
-            # 조건 4: 시가대비고가 3%이상
-            condition4 = False
-            condition4_detail = "미충족"
-            
-            try:
-                # 3분봉에서 체크
-                high_move_count_3m = 0
-                if len(df_calc) >= 30:
-                    for i in range(min(30, len(df_calc))):
-                        candle = df_calc.iloc[-(i+1)]
-                        if pd.notna(candle['open']) and pd.notna(candle['high']) and candle['open'] > 0:
-                            # 시가대비고가 상승률 계산
-                            high_move_pct = ((candle['high'] - candle['open']) / candle['open']) * 100
-                            if high_move_pct >= 3.0:
-                                high_move_count_3m += 1
-                
-                condition4 = high_move_count_3m >= 1
-                condition4_detail = f"{high_move_count_3m}회"
-                
-                conditions.append(f"[A전략 조건4] 시가대비고가 3%이상 ({condition4_detail}): {condition4}")
-            except Exception as e:
-                conditions.append(f"[A전략 조건4] 시가대비고가 조건 계산 실패: {e}")
+                conditions.append(f"[A전략 조건4] 종가<MA5 골든크로스 계산 실패: {e}")
                 condition4 = False
             
             
