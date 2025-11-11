@@ -1147,11 +1147,28 @@ class FifteenMinuteMegaStrategy:
                 df_calc = pd.DataFrame(df_3m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df_calc['timestamp'] = pd.to_datetime(df_calc['timestamp'], unit='ms')
                 
-                # 기술적 지표 계산
-                df_calc = self._calculate_technical_indicators(df_calc)
+                # 기술적 지표 계산 (indicators.py 모듈 사용)
+                df_calc = self.calculate_indicators(df_calc)
+                
+                if df_calc is None:
+                    return False, [f"[A전략] 3분봉 지표 계산 실패"]
                 
                 if len(df_calc) < 980:
-                    return False, [f"[A전략] 지표 계산 후 데이터 부족: {len(df_calc)}봉"]
+                    return False, [f"[A전략] 지표 계산 후 데이터 부족: {len(df_calc)}봉 (980봉 필요)"]
+                
+                # MA480이 제대로 계산되었는지 확인 (500봉 범위 체크를 위해 필수)
+                ma480_recent = df_calc['ma480'].tail(10)
+                ma480_valid_count = ma480_recent.notna().sum()
+                if ma480_valid_count < 5:
+                    return False, [f"[A전략] MA480 계산 실패: 최근 10봉 중 {ma480_valid_count}개만 유효 (5개 이상 필요)"]
+                
+                # 디버깅을 위한 지표 값 확인 (특정 심볼만)
+                clean_symbol = symbol.replace('/USDT:USDT', '')
+                if clean_symbol in ['APR', 'API3', 'PLAY']:
+                    ma480_current = df_calc['ma480'].iloc[-1]
+                    ma80_current = df_calc['ma80'].iloc[-1]
+                    bb480_current = df_calc.get('bb480_upper', pd.Series()).iloc[-1] if 'bb480_upper' in df_calc.columns else None
+                    print(f"[DEBUG] {clean_symbol}: 데이터길이={len(df_calc)}, MA480={ma480_current:.2f}, MA80={ma80_current:.2f}, BB480={bb480_current:.2f if pd.notna(bb480_current) else 'NaN'}")
                 
             except Exception as e:
                 return False, [f"[A전략] 3분봉 데이터 조회 실패: {e}"]
@@ -1175,8 +1192,11 @@ class FifteenMinuteMegaStrategy:
                         ma480_prev = df_calc['ma480'].iloc[prev_idx]
                         ma480_curr = df_calc['ma480'].iloc[curr_idx]
                         
+                        # MA480 값의 유효성 추가 체크 (0이나 극값 제외)
                         if (pd.notna(ma80_prev) and pd.notna(ma80_curr) and
                             pd.notna(ma480_prev) and pd.notna(ma480_curr) and
+                            ma480_prev > 0 and ma480_curr > 0 and  # MA480이 0보다 큰 값
+                            abs(ma480_prev - ma480_curr) < ma480_curr * 0.1 and  # 급격한 변화 제외
                             ma80_prev <= ma480_prev and ma80_curr > ma480_curr):
                             condition1 = True
                             condition1_detail = f"{i}봉전 MA80-MA480 골든크로스"
@@ -1188,6 +1208,7 @@ class FifteenMinuteMegaStrategy:
                     ma480_current = df_calc['ma480'].iloc[-1]
                     
                     if (pd.notna(ma80_current) and pd.notna(ma480_current) and
+                        ma480_current > 0 and  # MA480이 유효한 값
                         ma80_current < ma480_current):
                         condition1 = True
                         condition1_detail = "현재 MA80<MA480"
@@ -1220,8 +1241,11 @@ class FifteenMinuteMegaStrategy:
                             bb480_prev = bb480_data.iloc[prev_idx]
                             bb480_curr = bb480_data.iloc[curr_idx]
                             
+                            # BB480 값의 유효성 추가 체크
                             if (pd.notna(bb80_prev) and pd.notna(bb80_curr) and
                                 pd.notna(bb480_prev) and pd.notna(bb480_curr) and
+                                bb480_prev > 0 and bb480_curr > 0 and  # BB480이 0보다 큰 값
+                                abs(bb480_prev - bb480_curr) < bb480_curr * 0.1 and  # 급격한 변화 제외
                                 bb80_prev <= bb480_prev and bb80_curr > bb480_curr):
                                 condition2 = True
                                 condition2_detail = f"{i}봉전 BB80-BB480 골든크로스"
@@ -1551,8 +1575,8 @@ class FifteenMinuteMegaStrategy:
                 df_calc = pd.DataFrame(df_30m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df_calc['timestamp'] = pd.to_datetime(df_calc['timestamp'], unit='ms')
 
-                # 기술적 지표 계산
-                df_calc = self._calculate_technical_indicators(df_calc)
+                # 기술적 지표 계산 (indicators.py 모듈 사용)
+                df_calc = self.calculate_indicators(df_calc)
 
                 if len(df_calc) < 500:
                     return False, [f"[C전략] 지표 계산 후 데이터 부족: {len(df_calc)}봉"]
