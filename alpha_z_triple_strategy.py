@@ -34,7 +34,7 @@ A전략(3분봉 바닥급등타점) + B전략(15분봉 급등초입) + C전략(3
   * 예: 2.5% 수익 도달 → 2.0%로 하락 시 청산 (1.0% 이익 확보)
 
 전략 조건:
-A전략(3분봉 바닥급등타점): 4개 조건 - (200봉이내 MA80-MA480 골든크로스 or MA80<MA480) + 200봉이내 BB80-BB480 골든크로스 + 60봉이내 MA5-MA80 골든크로스 + 5봉이내 종가<MA5 골든크로스
+A전략(3분봉 바닥급등타점): 4개 조건 - (500봉이내 MA80-MA480 골든크로스 or MA80<MA480) + 500봉이내 BB80-BB480 골든크로스 + 60봉이내 MA5-MA80 골든크로스 + 5봉이내 종가<MA5 골든크로스
 B전략(15분봉 급등초입): 6개 조건 - 200봉이내 MA80-MA480 골든크로스 + BB골든크로스 + MA5-MA20골든크로스 + BB200상단-MA480 상향돌파 + MA20-MA80 데드크로스 or 이격도조건 + 시가대비고가 3%이상
 C전략(30분봉 급등맥점): 2개 기본조건 + 3개 타점(A/B/C) - 기본조건(50봉이내 MA80-MA480 골든크로스 or MA80<MA480 + 100봉이내 MA480-BB200 크로스) + A/B/C 타점 중 1개
 """
@@ -1107,7 +1107,7 @@ class FifteenMinuteMegaStrategy:
         try:
             conditions = []
             
-            # 3분봉 데이터 조회 (80+480=560봉 필요, 여유분으로 600봉 요청)
+            # 3분봉 데이터 조회 (500+480=980봉 필요, 여유분으로 1000봉 요청)
             try:
                 df_3m = None
                 
@@ -1116,32 +1116,32 @@ class FifteenMinuteMegaStrategy:
                     try:
                         # 메서드가 존재하는지 확인
                         if hasattr(self.ws_provider, 'get_cached_ohlcv'):
-                            df_3m = self.ws_provider.get_cached_ohlcv(symbol, '3m', 600)
+                            df_3m = self.ws_provider.get_cached_ohlcv(symbol, '3m', 1000)
                         else:
                             # 메서드가 없으면 일반 get_ohlcv 사용
-                            df_3m = self.ws_provider.get_ohlcv(symbol, '3m', 600)
+                            df_3m = self.ws_provider.get_ohlcv(symbol, '3m', 1000)
                             
-                        if df_3m is not None and len(df_3m) >= 500:
+                        if df_3m is not None and len(df_3m) >= 980:
                             # WebSocket 성공 - 디버그 메시지
                             if symbol in ['APR/USDT:USDT', 'API3/USDT:USDT', 'PLAY/USDT:USDT']:
                                 print(f"[DEBUG] {symbol}: WebSocket 성공 - 3분봉 {len(df_3m)}개")
                         else:
                             # 실패시 재시도
-                            df_3m = self.ws_provider.get_ohlcv(symbol, '3m', 600)
+                            df_3m = self.ws_provider.get_ohlcv(symbol, '3m', 1000)
                     except Exception as ws_error:
                         if symbol in ['APR/USDT:USDT', 'API3/USDT:USDT', 'PLAY/USDT:USDT']:
                             print(f"[DEBUG] {symbol}: WebSocket 실패 - {ws_error}")
                         df_3m = None
                 
                 # 2차 시도: WebSocket 실패시 REST API 사용
-                if df_3m is None or len(df_3m) < 500:
+                if df_3m is None or len(df_3m) < 980:
                     try:
-                        df_3m = self.exchange.fetch_ohlcv(symbol, '3m', limit=600)
+                        df_3m = self.exchange.fetch_ohlcv(symbol, '3m', limit=1000)
                     except Exception as api_error:
                         return False, [f"[A전략] 3분봉 데이터 완전 실패: {api_error}"]
                 
-                if df_3m is None or len(df_3m) < 500:
-                    return False, [f"[A전략] 3분봉 데이터 부족: {len(df_3m) if df_3m is not None else 0}봉 (500봉 필요)"]
+                if df_3m is None or len(df_3m) < 980:
+                    return False, [f"[A전략] 3분봉 데이터 부족: {len(df_3m) if df_3m is not None else 0}봉 (980봉 필요)"]
                 
                 # DataFrame 변환
                 df_calc = pd.DataFrame(df_3m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -1150,20 +1150,20 @@ class FifteenMinuteMegaStrategy:
                 # 기술적 지표 계산
                 df_calc = self._calculate_technical_indicators(df_calc)
                 
-                if len(df_calc) < 500:
+                if len(df_calc) < 980:
                     return False, [f"[A전략] 지표 계산 후 데이터 부족: {len(df_calc)}봉"]
                 
             except Exception as e:
                 return False, [f"[A전략] 3분봉 데이터 조회 실패: {e}"]
             
-            # 조건 1: 200봉이내 MA80-MA480 골든크로스 or 현재 MA80<MA480
+            # 조건 1: 500봉이내 MA80-MA480 골든크로스 or 현재 MA80<MA480
             condition1 = False
             condition1_detail = "미충족"
             
             try:
-                # 200봉이내 골든크로스 체크
-                if len(df_calc) >= 201:
-                    for i in range(1, min(201, len(df_calc))):
+                # 500봉이내 골든크로스 체크
+                if len(df_calc) >= 501:
+                    for i in range(1, min(501, len(df_calc))):
                         prev_idx = -(i+1)
                         curr_idx = -i
                         
@@ -1192,23 +1192,23 @@ class FifteenMinuteMegaStrategy:
                         condition1 = True
                         condition1_detail = "현재 MA80<MA480"
                         
-                conditions.append(f"[A전략 조건1] 200봉이내 MA80-MA480 조건 ({condition1_detail}): {condition1}")
+                conditions.append(f"[A전략 조건1] 500봉이내 MA80-MA480 조건 ({condition1_detail}): {condition1}")
             except Exception as e:
                 conditions.append(f"[A전략 조건1] MA80-MA480 조건 계산 실패: {e}")
                 condition1 = False
             
-            # 조건 2: 200봉이내 BB80-BB480 골든크로스
+            # 조건 2: 500봉이내 BB80-BB480 골든크로스
             condition2 = False
             condition2_detail = "골든크로스 없음"
             
             try:
-                if len(df_calc) >= 201:
+                if len(df_calc) >= 501:
                     # BB80과 BB480 데이터 가져오기
                     bb80_data = df_calc.get('bb80_upper', df_calc.get('bb80', pd.Series()))
                     bb480_data = df_calc.get('bb480_upper', df_calc.get('bb480', pd.Series()))
                     
-                    if len(bb80_data) >= 201 and len(bb480_data) >= 201:
-                        for i in range(1, min(201, len(bb80_data))):
+                    if len(bb80_data) >= 501 and len(bb480_data) >= 501:
+                        for i in range(1, min(501, len(bb80_data))):
                             prev_idx = -(i+1)
                             curr_idx = -i
                             
@@ -1227,7 +1227,7 @@ class FifteenMinuteMegaStrategy:
                                 condition2_detail = f"{i}봉전 BB80-BB480 골든크로스"
                                 break
                                 
-                conditions.append(f"[A전략 조건2] 200봉이내 BB80-BB480 골든크로스 ({condition2_detail}): {condition2}")
+                conditions.append(f"[A전략 조건2] 500봉이내 BB80-BB480 골든크로스 ({condition2_detail}): {condition2}")
             except Exception as e:
                 conditions.append(f"[A전략 조건2] BB80-BB480 골든크로스 계산 실패: {e}")
                 condition2 = False

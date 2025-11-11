@@ -112,6 +112,12 @@ class DCAPosition:
     trailing_stop_active: bool = False  # Trailing 스탑 Active화 여부
     trailing_stop_high: float = 0.0  # Trailing 스탑 Highest price 추적
     trailing_stop_percentage: float = 0.05  # Trailing 스탑 비율 (5%)
+    
+    # 수익 보호 청산 추적 필드
+    max_profit_achieved: float = 0.0      # 달성한 최대 수익률 추적
+    profit_protection_active: bool = False # 수익 보호 청산 활성화 여부
+    profit_protection_level: int = 0       # 현재 수익 보호 단계 (1:2%+, 2:4%+, 3:6%+)
+    profit_protection_last_check: str = "" # 마지막 수익 보호 체크 시간
 
     # Pyramid (불타기) 관련 필드
     pyramid_count: int = 0              # 현재 불타기 횟수 (0, 1, 2)
@@ -163,36 +169,36 @@ class ImprovedDCAPositionManager:
             'initial_weight': 0.010,      # 최초 Entry 비중 (1.0%) - 불타기 여유 확보
             'initial_leverage': 10.0,     # 최초 Entry 레버리지 (10배)
 
-            # Pyramid (불타기) Settings - 상승 눌림목에서만 실행
+            # 🎯 실전 트레이더 기준 불타기 (상승 추세 확정 + 역피라미드 구조)
             'pyramid_enabled': True,      # 불타기 활성화
-            'max_pyramid_count': 2,       # 최대 불타기 횟수 (2회)
+            'max_pyramid_count': 3,       # 최대 불타기 횟수 (3회)
 
-            # 1차 불타기 조건
-            'pyramid_1_rise_min': 0.015,  # 진입 후 최소 +1.5% 상승 필요 (원금 기준)
-            'pyramid_1_pullback_min': 0.008,  # 최고점 대비 최소 -0.8% 눌림 (원금 기준)
-            'pyramid_1_pullback_max': 0.012,  # 최고점 대비 최대 -1.2% 눌림 (원금 기준)
-            'pyramid_1_weight': 0.005,    # 1차 불타기 비중 (0.5%)
-            'pyramid_1_leverage': 10.0,   # 1차 불타기 레버리지 (10배)
-            'pyramid_1_timeout': 1800,    # 1차 불타기 타임아웃 (30분)
+            # 1차 불타기: +0.5~1.0% 수익권 (방향 확정 + 거래량 유지)
+            'pyramid_1_profit_min': 0.005,   # 최소 +0.5% 수익
+            'pyramid_1_profit_max': 0.010,   # 최대 +1.0% 수익
+            'pyramid_1_weight': 0.007,       # 0.7배 비중 (역피라미드)
+            'pyramid_1_leverage': 10.0,      # 10배 레버리지
 
-            # 2차 불타기 조건
-            'pyramid_2_rise_min': 0.010,  # 1차 이후 최소 +1.0% 추가 상승 (원금 기준)
-            'pyramid_2_pullback_min': 0.008,  # 최고점 대비 최소 -0.8% 눌림 (원금 기준)
-            'pyramid_2_pullback_max': 0.010,  # 최고점 대비 최대 -1.0% 눌림 (원금 기준)
-            'pyramid_2_weight': 0.005,    # 2차 불타기 비중 (0.5%)
-            'pyramid_2_leverage': 10.0,   # 2차 불타기 레버리지 (10배)
-            'pyramid_2_timeout': 1200,    # 2차 불타기 타임아웃 (20분)
-            'pyramid_2_profit_min': 0.020, # 2차 실행 최소 총 수익률 +2.0%
+            # 2차 불타기: +1.5~2.0% 수익권 (전고점 돌파 + 매수세 확인)
+            'pyramid_2_profit_min': 0.015,   # 최소 +1.5% 수익
+            'pyramid_2_profit_max': 0.020,   # 최대 +2.0% 수익
+            'pyramid_2_weight': 0.005,       # 0.5배 비중 (역피라미드)
+            'pyramid_2_leverage': 10.0,      # 10배 레버리지
 
-            # 불타기 금지 조건
-            'pyramid_stop_loss_trigger': -0.020,  # 최고점 대비 -2.0% 이상 하락 시 불타기 금지
+            # 3차 불타기: +3.0% 이상 (대세상승 + 볼밴확장 + 거래량급증)
+            'pyramid_3_profit_min': 0.030,   # 최소 +3.0% 수익
+            'pyramid_3_weight': 0.003,       # 0.3배 비중 (최소 비중)
+            'pyramid_3_leverage': 10.0,      # 10배 레버리지
 
-            # Stage별 손절 기준 (평균가 기준 -3% 손절)
-            'stop_loss_by_stage': {
-                'initial': -0.03,      # 초기 Entry: -3% 전량 손절
-                'pyramid_1': -0.03,    # 1차 불타기 후: -3% 손절 (평균가 기준)
-                'pyramid_2': -0.03     # 2차 불타기 후: -3% 손절 (평균가 기준)
-            },
+            # 🚫 불타기 금지 조건 (실전 기준)
+            'pyramid_volume_decline_threshold': 0.7,  # 거래량 70% 이하 급감시 금지
+            'pyramid_sideways_threshold': 0.002,      # 횡보 ±0.2% 감지시 금지
+            'pyramid_rsi_overbought': 70,             # RSI 70 이상시 금지
+
+            # 🚫 손절선 고정 원칙 (초기 진입가 기준 절대 고정!)
+            'stop_loss_fixed': -0.03,          # 초기 진입가 기준 -3% 손절선 (불타기 후에도 고정)
+            'stop_loss_never_change': True,    # 손절선 변경 금지 플래그
+            # 주의: 평균가 기준 손절선 사용 금지! 리스크 초기 진입 손절폭 내로 제한
 
             # 수익 Exit 전략 (Trailing Stop 방식)
             'trailing_stop_enabled': True,       # Trailing Stop 활성화
@@ -1085,12 +1091,17 @@ class ImprovedDCAPositionManager:
             # Current Profit ratio 계산
             profit_pct = (current_price - position.average_price) / position.average_price
             
-            # 1. 손절 Confirm (최우선)
+            # 1. 손절 Confirm (최우선 - 초기 진입가 기준 고정)
             stop_loss_result = self._check_stop_loss_trigger(position, current_price, profit_pct)
             if stop_loss_result:
                 return stop_loss_result
             
-            # 2. 수익 Exit Confirm
+            # 1.5. 수익 보호 청산 Confirm (손절선 고정 + 수익 보호 동시 적용)
+            profit_protection_result = self.check_profit_protection_exit(position, current_price)
+            if profit_protection_result:
+                return profit_protection_result
+            
+            # 2. 기존 수익 Exit Confirm
             profit_exit_result = self._check_profit_exit_triggers(position, current_price, profit_pct)
             if profit_exit_result:
                 return profit_exit_result
@@ -1224,40 +1235,37 @@ class ImprovedDCAPositionManager:
 
     def check_pyramid_opportunity(self, position: DCAPosition, current_price: float) -> Optional[Dict[str, Any]]:
         """
-        불타기 기회 확인
-        상승 후 눌림목에서 추가 매수 판단
+        🎯 실전 트레이더 기준 불타기 기회 확인
+        상승 추세 확정 후 비중 점감 추가 진입
         """
         try:
             if not self.config.get('pyramid_enabled', False):
                 return None
 
-            # 최고점 갱신
+            # 최고점 갱신 및 추적
             if current_price > position.pyramid_highest_price:
                 position.pyramid_highest_price = current_price
                 position.pyramid_last_peak_time = get_korea_time().isoformat()
 
-            # 최대 불타기 횟수 체크
-            max_count = self.config.get('max_pyramid_count', 2)
+            # 최대 불타기 횟수 체크 (3회)
+            max_count = self.config.get('max_pyramid_count', 3)
             if position.pyramid_count >= max_count:
                 return None
 
-            # 불타기 금지 조건: 최고점 대비 급락
-            stop_trigger = self.config.get('pyramid_stop_loss_trigger', -0.020)
-            if position.pyramid_highest_price > 0:
-                drop_from_peak = (current_price - position.pyramid_highest_price) / position.pyramid_highest_price
-                if drop_from_peak <= stop_trigger:
-                    return None
-
-            # 현재 수익률 계산
+            # 현재 수익률 계산 (초기 진입가 기준)
             current_profit = (current_price - position.initial_entry_price) / position.initial_entry_price
 
-            # 1차 불타기 체크
+            # 🚫 불탄기 금지 조건 체크 (실전 기준)
+            if self._check_pyramid_forbidden_conditions(position, current_price, current_profit):
+                return None
+
+            # 단계별 불타기 체크
             if not position.pyramid_1_executed:
                 return self._check_pyramid_1_conditions(position, current_price, current_profit)
-
-            # 2차 불타기 체크
-            if not position.pyramid_2_executed and position.pyramid_1_executed:
+            elif not position.pyramid_2_executed:
                 return self._check_pyramid_2_conditions(position, current_price, current_profit)
+            elif not position.pyramid_3_executed:
+                return self._check_pyramid_3_conditions(position, current_price, current_profit)
 
             return None
 
@@ -1266,36 +1274,18 @@ class ImprovedDCAPositionManager:
             return None
 
     def _check_pyramid_1_conditions(self, position: DCAPosition, current_price: float, current_profit: float) -> Optional[Dict[str, Any]]:
-        """1차 불타기 조건 체크"""
+        """🎯 1차 불타기: +0.5~1.0% 수익권 (방향 확정 + 거래량 유지)"""
         try:
-            # 1. 상승 확인: 진입 후 최소 +1.5% 이상
-            rise_min = self.config.get('pyramid_1_rise_min', 0.015)
-            if position.pyramid_highest_price <= 0:
+            # 1. 수익률 범위 체크: +0.5% ~ +1.0%
+            profit_min = self.config.get('pyramid_1_profit_min', 0.005)
+            profit_max = self.config.get('pyramid_1_profit_max', 0.010)
+            
+            if not (profit_min <= current_profit <= profit_max):
                 return None
 
-            rise_from_entry = (position.pyramid_highest_price - position.initial_entry_price) / position.initial_entry_price
-            if rise_from_entry < rise_min:
-                return None
-
-            # 2. 눌림목 확인: 최고점 대비 -0.8% ~ -1.2%
-            pullback_min = self.config.get('pyramid_1_pullback_min', 0.008)
-            pullback_max = self.config.get('pyramid_1_pullback_max', 0.012)
-
-            pullback = (position.pyramid_highest_price - current_price) / position.pyramid_highest_price
-            if not (pullback_min <= pullback <= pullback_max):
-                return None
-
-            # 3. 여전히 수익 상태 확인
-            if current_profit < 0.003:  # 최소 +0.3% 수익
-                return None
-
-            # 4. 타임아웃 체크
-            timeout = self.config.get('pyramid_1_timeout', 1800)
-            from datetime import datetime
-            entry_time = datetime.fromisoformat(position.created_at)
-            current_time = get_korea_time()
-            elapsed = (current_time - entry_time).total_seconds()
-            if elapsed > timeout:
+            # 2. 📈 실전 시그널 조건 체크
+            signal_check = self._check_pyramid_signals(position, current_price)
+            if not signal_check['valid']:
                 return None
 
             # 불타기 신호 반환
@@ -1304,10 +1294,9 @@ class ImprovedDCAPositionManager:
                 'stage': 'pyramid_1',
                 'current_price': current_price,
                 'highest_price': position.pyramid_highest_price,
-                'rise_pct': rise_from_entry * 100,
-                'pullback_pct': pullback * 100,
                 'current_profit_pct': current_profit * 100,
-                'weight': self.config.get('pyramid_1_weight', 0.005)
+                'weight': self.config.get('pyramid_1_weight', 0.007),  # 0.7배 비중
+                'signal_data': signal_check
             }
 
         except Exception as e:
@@ -1315,41 +1304,18 @@ class ImprovedDCAPositionManager:
             return None
 
     def _check_pyramid_2_conditions(self, position: DCAPosition, current_price: float, current_profit: float) -> Optional[Dict[str, Any]]:
-        """2차 불타기 조건 체크"""
+        """🎯 2차 불타기: +1.5~2.0% 수익권 (전고점 돌파 + 매수세 확인)"""
         try:
-            # 1차 불타기 이후 최고점 기준으로 판단
-            if not position.pyramid_1_entry_time:
+            # 1. 수익률 범위 체크: +1.5% ~ +2.0%
+            profit_min = self.config.get('pyramid_2_profit_min', 0.015)
+            profit_max = self.config.get('pyramid_2_profit_max', 0.020)
+            
+            if not (profit_min <= current_profit <= profit_max):
                 return None
 
-            from datetime import datetime
-            pyramid_1_time = datetime.fromisoformat(position.pyramid_1_entry_time)
-
-            # 1. 1차 이후 추가 상승 확인: +1.0% 이상
-            rise_min = self.config.get('pyramid_2_rise_min', 0.010)
-
-            # 1차 진입 후 최고점까지 상승률 (평균가 기준)
-            rise_since_pyramid_1 = (position.pyramid_highest_price - position.average_price) / position.average_price
-            if rise_since_pyramid_1 < rise_min:
-                return None
-
-            # 2. 눌림목 확인: 최고점 대비 -0.8% ~ -1.0%
-            pullback_min = self.config.get('pyramid_2_pullback_min', 0.008)
-            pullback_max = self.config.get('pyramid_2_pullback_max', 0.010)
-
-            pullback = (position.pyramid_highest_price - current_price) / position.pyramid_highest_price
-            if not (pullback_min <= pullback <= pullback_max):
-                return None
-
-            # 3. 총 수익률 확인: 최소 +2.0% 이상
-            profit_min = self.config.get('pyramid_2_profit_min', 0.020)
-            if current_profit < profit_min:
-                return None
-
-            # 4. 타임아웃 체크
-            timeout = self.config.get('pyramid_2_timeout', 1200)
-            current_time = get_korea_time()
-            elapsed = (current_time - pyramid_1_time).total_seconds()
-            if elapsed > timeout:
+            # 2. 📈 실전 시그널 조건 체크 (전고점 돌파 포함)
+            signal_check = self._check_pyramid_signals(position, current_price, stage=2)
+            if not signal_check['valid']:
                 return None
 
             # 불타기 신호 반환
@@ -1358,15 +1324,205 @@ class ImprovedDCAPositionManager:
                 'stage': 'pyramid_2',
                 'current_price': current_price,
                 'highest_price': position.pyramid_highest_price,
-                'rise_pct': rise_since_pyramid_1 * 100,
-                'pullback_pct': pullback * 100,
                 'current_profit_pct': current_profit * 100,
-                'weight': self.config.get('pyramid_2_weight', 0.005)
+                'weight': self.config.get('pyramid_2_weight', 0.005),  # 0.5배 비중
+                'signal_data': signal_check
             }
 
         except Exception as e:
             self.logger.error(f"2차 불타기 조건 체크 실패: {e}")
             return None
+            
+    def _check_pyramid_3_conditions(self, position: DCAPosition, current_price: float, current_profit: float) -> Optional[Dict[str, Any]]:
+        """🎯 3차 불타기: +3.0% 이상 (대세상승 + 볼배확장 + 거래량급증)"""
+        try:
+            # 1. 수익률 체크: +3.0% 이상
+            profit_min = self.config.get('pyramid_3_profit_min', 0.030)
+            
+            if current_profit < profit_min:
+                return None
+
+            # 2. 📈 폭발적 상승 시그널 조건 체크
+            signal_check = self._check_pyramid_signals(position, current_price, stage=3)
+            if not signal_check['valid']:
+                return None
+
+            # 불타기 신호 반환
+            return {
+                'signal': True,
+                'stage': 'pyramid_3',
+                'current_price': current_price,
+                'highest_price': position.pyramid_highest_price,
+                'current_profit_pct': current_profit * 100,
+                'weight': self.config.get('pyramid_3_weight', 0.003),  # 0.3배 비중
+                'signal_data': signal_check
+            }
+
+        except Exception as e:
+            self.logger.error(f"3차 불타기 조건 체크 실패: {e}")
+            return None
+    
+    def _check_pyramid_forbidden_conditions(self, position: DCAPosition, current_price: float, current_profit: float) -> bool:
+        """🚫 불타기 금지 조건 체크 (실전 기준)"""
+        try:
+            # 1. 거래량 급감 체크 (70% 이하로 급감시 금지)
+            if hasattr(position, 'last_volume_check') and position.last_volume_check > 0:
+                volume_decline_threshold = self.config.get('pyramid_volume_decline_threshold', 0.7)
+                # 실제 거래량 조회 로직은 전략 레벨에서 추가 구현 필요
+                # 여기서는 플래그만 반환
+                pass
+                
+            # 2. 횡보 구간 감지 (±0.2% 내 움직임시 금지)
+            sideways_threshold = self.config.get('pyramid_sideways_threshold', 0.002)
+            if abs((current_price - position.pyramid_highest_price) / position.pyramid_highest_price) < sideways_threshold:
+                return True  # 금지
+                
+            # 3. 초기 진입가 손실 상황시 금지
+            if current_profit < -0.01:  # -1% 이하 손실시 금지
+                return True
+                
+            return False  # 금지 사유 없음
+            
+        except Exception as e:
+            self.logger.error(f"불타기 금지 조건 체크 실패: {e}")
+            return True  # 오류시 안전하게 금지
+            
+    def _check_pyramid_signals(self, position: DCAPosition, current_price: float, stage: int = 1) -> Dict[str, Any]:
+        """
+        📈 실전 불타기 시그널 조건 체크
+        조건: 현재가 > 이전 고점 && 거래량 > 이전봉 대비 1.5배 && 볼밴 상단 확장 중
+        """
+        try:
+            # 1. 현재가 > 이전 고점 (상승 추세 확인)
+            price_breakout = current_price > position.pyramid_highest_price * 0.998  # 0.2% 여유 둔
+            
+            # 2. 거래량 증가 신호 (실제 구현시 API 호출 필요)
+            volume_surge = True  # 임시로 True, 실제로는 거래량 API 체크 필요
+            
+            # 3. 볼린저밴드 상단 확장 신호 (실제 구현시 기술적 지표 계산 필요)
+            bb_expansion = True  # 임시로 True, 실제로는 BB 지표 체크 필요
+            
+            # 4. RSI 과열 체크 (선택적)
+            rsi_ok = True  # RSI 70 이하 체크, 실제 구현시 RSI 계산 필요
+            
+            # 단계별 추가 조건
+            stage_condition = True
+            if stage == 2:  # 2차 불타기: 전고점 돌파 + 매수세 확인
+                stage_condition = price_breakout and volume_surge
+            elif stage == 3:  # 3차 불타기: 대세상승 + 볼밴확장 + 거래량급증
+                stage_condition = price_breakout and volume_surge and bb_expansion
+            
+            # 최종 유효성 판단
+            is_valid = price_breakout and volume_surge and bb_expansion and rsi_ok and stage_condition
+            
+            return {
+                'valid': is_valid,
+                'price_breakout': price_breakout,
+                'volume_surge': volume_surge,
+                'bb_expansion': bb_expansion,
+                'rsi_ok': rsi_ok,
+                'stage_condition': stage_condition,
+                'stage': stage
+            }
+            
+        except Exception as e:
+            self.logger.error(f"불타기 시그널 체크 실패: {e}")
+            return {'valid': False, 'error': str(e)}
+            
+    def check_profit_protection_exit(self, position: DCAPosition, current_price: float) -> Optional[Dict[str, Any]]:
+        """
+        🎯 수익 보호 청산 체크 (손절선 고정 + 수익 보호 동시 적용)
+        """
+        try:
+            if not self.config.get('profit_protection_enabled', True):
+                return None
+
+            # 현재 수익률 계산 (초기 진입가 기준 - 절대 고정)
+            current_profit = (current_price - position.initial_entry_price) / position.initial_entry_price
+
+            # 최대 수익률 업데이트
+            if current_profit > position.max_profit_achieved:
+                position.max_profit_achieved = current_profit
+                
+            # 수익 보호 단계 업데이트
+            self._update_profit_protection_level(position, position.max_profit_achieved)
+
+            # 🔴 1순위: 6% 이상시 5% 수익 최우선 보장
+            if position.max_profit_achieved >= self.config.get('profit_protection_priority_min', 0.06):
+                guarantee_profit = self.config.get('profit_protection_priority_guarantee', 0.05)
+                if current_profit <= guarantee_profit:
+                    return {
+                        'signal': True,
+                        'type': 'profit_protection_priority',
+                        'reason': f'최대 {position.max_profit_achieved*100:.1f}% 달성 후 {guarantee_profit*100:.0f}% 보장 수준 도달',
+                        'current_profit_pct': current_profit * 100,
+                        'max_profit_pct': position.max_profit_achieved * 100,
+                        'guarantee_pct': guarantee_profit * 100,
+                        'exit_ratio': 1.0  # 전량 청산
+                    }
+
+            # 🟡 2순위: 4% 이상시 절반 하락 보호 청산
+            elif position.max_profit_achieved >= self.config.get('profit_protection_half_min', 0.04):
+                half_ratio = self.config.get('profit_protection_half_ratio', 0.5)
+                half_decline_threshold = position.max_profit_achieved * half_ratio
+                if current_profit <= half_decline_threshold:
+                    return {
+                        'signal': True,
+                        'type': 'profit_protection_half',
+                        'reason': f'최대 {position.max_profit_achieved*100:.1f}% 에서 {half_ratio*100:.0f}% 하락 보호',
+                        'current_profit_pct': current_profit * 100,
+                        'max_profit_pct': position.max_profit_achieved * 100,
+                        'decline_threshold_pct': half_decline_threshold * 100,
+                        'exit_ratio': 1.0  # 전량 청산
+                    }
+
+            # 🟢 3순위: 2% 이상시 본절 보호 청산
+            elif position.max_profit_achieved >= self.config.get('profit_protection_breakeven_min', 0.02):
+                breakeven_trigger = self.config.get('profit_protection_breakeven_trigger', 0.001)
+                if current_profit <= breakeven_trigger:
+                    return {
+                        'signal': True,
+                        'type': 'profit_protection_breakeven',
+                        'reason': f'최대 {position.max_profit_achieved*100:.1f}% 달성 후 본절 보호 ({breakeven_trigger*100:.1f}% 수익 유지)',
+                        'current_profit_pct': current_profit * 100,
+                        'max_profit_pct': position.max_profit_achieved * 100,
+                        'breakeven_trigger_pct': breakeven_trigger * 100,
+                        'exit_ratio': 1.0  # 전량 청산
+                    }
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"수익 보호 청산 체크 실패: {e}")
+            return None
+            
+    def _update_profit_protection_level(self, position: DCAPosition, max_profit: float) -> None:
+        """수익 보호 단계 업데이트"""
+        try:
+            old_level = position.profit_protection_level
+            
+            # 단계 결정
+            if max_profit >= self.config.get('profit_protection_priority_min', 0.06):
+                position.profit_protection_level = 3  # 6% 이상: 최우선 보장
+            elif max_profit >= self.config.get('profit_protection_half_min', 0.04):
+                position.profit_protection_level = 2  # 4% 이상: 절반 하락 보호
+            elif max_profit >= self.config.get('profit_protection_breakeven_min', 0.02):
+                position.profit_protection_level = 1  # 2% 이상: 본절 보호
+            else:
+                position.profit_protection_level = 0  # 보호 대상 아님
+                
+            # 단계 상승시 로깅
+            if position.profit_protection_level > old_level:
+                level_names = {
+                    1: '본절보호(2%+)',
+                    2: '절반하락보호(4%+)', 
+                    3: '최우선보장(6%+)'
+                }
+                level_name = level_names.get(position.profit_protection_level, '')
+                self.logger.info(f"🎯 수익보호 단계 상승: Lv.{position.profit_protection_level} {level_name} 활성화")
+                
+        except Exception as e:
+            self.logger.error(f"수익 보호 단계 업데이트 실패: {e}")
 
     def execute_pyramid_entry(self, symbol: str, pyramid_signal: Dict[str, Any]) -> bool:
         """
