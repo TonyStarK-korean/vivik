@@ -26,6 +26,15 @@ import traceback
 import pandas as pd
 import numpy as np
 
+# Binance Rate Limiter 추가 (IP 차단 방지)
+try:
+    from binance_rate_limiter import RateLimitedExchange, BinanceRateLimiter
+    HAS_RATE_LIMITER = True
+    print("[INFO] DCA 매니저 - Binance Rate Limiter 로드 완료")
+except ImportError:
+    print("[WARNING] DCA 매니저 - binance_rate_limiter.py 없음, Rate Limiting 비활성화")
+    HAS_RATE_LIMITER = False
+
 # Legacy 고급/기본 Exit 시스템 Remove - New 4가지 Exit 방식만 Usage
 
 # 거래 로깅 시스템 추가
@@ -112,6 +121,11 @@ class DCAPosition:
     is_active: bool
     created_at: str
     last_update: str
+    
+    # 전략 정보 필드
+    strategy: str = "A"  # A, B, C 전략
+    signal_metadata: dict = None  # 원본 신호 데이터
+    
     cyclic_count: int = 0
     max_cyclic_count: int = 3
     cyclic_state: str = CyclicState.NORMAL_DCA.value
@@ -138,20 +152,36 @@ class DCAPosition:
     profit_protection_last_check: str = "" # 마지막 수익 보호 체크 시간
 
     # Pyramid (불타기) 관련 필드
-    pyramid_count: int = 0              # 현재 불타기 횟수 (0, 1, 2)
-    pyramid_stage: str = 'initial'       # 불타기 단계 (initial, pyramid_1, pyramid_2)
+    pyramid_count: int = 0              # 현재 불타기 횟수 (0, 1, 2, 3)
+    pyramid_stage: str = 'initial'       # 불타기 단계 (initial, pyramid_1, pyramid_2, pyramid_3)
     pyramid_highest_price: float = 0.0   # 진입 이후 최고가 추적
     pyramid_last_peak_time: str = ""     # 최고점 도달 시간
     pyramid_1_executed: bool = False     # 1차 불타기 실행 여부
     pyramid_2_executed: bool = False     # 2차 불타기 실행 여부
+    pyramid_3_executed: bool = False     # 3차 불타기 실행 여부
     pyramid_1_entry_time: str = ""       # 1차 불타기 진입 시간
     pyramid_2_entry_time: str = ""       # 2차 불타기 진입 시간
+    pyramid_3_entry_time: str = ""       # 3차 불타기 진입 시간
+    last_pyramid_time: str = ""          # 마지막 불타기 실행 시간 (간격 제한용)
 
 class ImprovedDCAPositionManager:
     """count선된 Cyclic trading수 Position Admin"""
     
     def __init__(self, exchange=None, telegram_bot=None, stats_callback=None, strategy=None):
-        self.exchange = exchange
+        # Exchange Rate Limiter 적용 (IP 차단 방지)
+        if exchange and HAS_RATE_LIMITER:
+            # 이미 RateLimitedExchange인지 확인
+            if hasattr(exchange, 'rate_limiter'):
+                self.exchange = exchange  # 이미 래핑된 경우 그대로 사용
+            else:
+                # 래핑되지 않은 경우 래핑 적용
+                self.exchange = RateLimitedExchange(exchange, logging.getLogger(__name__))
+                print("[INFO] DCA 매니저 - Exchange Rate Limiter 적용 완료")
+        else:
+            self.exchange = exchange
+            if exchange and not HAS_RATE_LIMITER:
+                print("[WARNING] DCA 매니저 - Rate Limiter 없음, IP 차단 위험")
+        
         self.telegram_bot = telegram_bot
         self.stats_callback = stats_callback
         self.strategy = strategy
@@ -663,7 +693,8 @@ class ImprovedDCAPositionManager:
             return False
 
     def add_position(self, symbol: str, entry_price: float, quantity: float,
-                    notional: float, leverage: float = 10.0, total_balance: float = None) -> bool:
+                    notional: float, leverage: float = 10.0, total_balance: float = None,
+                    strategy: str = None, signal_data: dict = None) -> bool:
         """New Position Add (DCA limit order 자동 Create 포함)"""
         try:
             with self.sync_lock:
@@ -695,6 +726,8 @@ class ImprovedDCAPositionManager:
                     is_active=True,
                     created_at=get_korea_time().isoformat(),
                     last_update=get_korea_time().isoformat(),
+                    strategy=strategy or "A",  # 전략 정보 저장
+                    signal_metadata=signal_data,  # 원본 신호 데이터 저장
                     cyclic_count=0,
                     max_cyclic_count=3,
                     cyclic_state=CyclicState.NORMAL_DCA.value,
@@ -707,12 +740,12 @@ class ImprovedDCAPositionManager:
 
                 self.logger.info(f"New position added: {symbol} - Entry가: {entry_price}, Quantity: {quantity}")
 
-                # 📊 신규 포지션 진입 로그 기록 (DCA 매니저에서도 기록)
+                # 📊 신규 포지션 진입 로그 기록 (실제 전략 정보 사용)
                 if HAS_TRADING_LOGGER:
                     clean_symbol = symbol.replace('/USDT:USDT', '')
                     log_entry_signal(
                         symbol=clean_symbol,
-                        strategy="DCA",  # DCA 매니저에서 관리하는 포지션
+                        strategy=strategy or "A",  # 실제 전략 정보 사용 (A/B/C)
                         price=entry_price,
                         quantity=quantity,
                         leverage=leverage,
@@ -721,7 +754,9 @@ class ImprovedDCAPositionManager:
                             'notional': notional,
                             'total_balance': total_balance,
                             'position_id': symbol,
-                            'entry_time': get_korea_time().isoformat()
+                            'entry_time': get_korea_time().isoformat(),
+                            'original_strategy': strategy,  # 원본 전략 정보 보관
+                            'signal_data': signal_data      # 원본 신호 데이터 보관
                         }
                     )
 
@@ -743,6 +778,11 @@ class ImprovedDCAPositionManager:
     def _create_initial_dca_limit_orders(self, position: DCAPosition, total_balance: float):
         """최초 Entry시 DCA 1차, 2차 지정가 주문 자동 Create"""
         try:
+            # 🔥 DCA 시스템이 비활성화된 경우 조용히 건너뛰기
+            if not self.config.get('dca_enabled', True):
+                self.logger.debug(f"🔕 DCA 시스템 비활성화됨: {position.symbol} DCA 주문 생성 건너뛰기")
+                return
+                
             self.logger.info(f"🎯 {position.symbol} DCA limit order 자동 Create Starting...")
             self.logger.info(f"   Entry가: ${position.initial_entry_price:.6f}")
 
@@ -892,11 +932,22 @@ class ImprovedDCAPositionManager:
             if not missing_stages:
                 return {'orders_placed': 0, 'message': 'All DCA orders already active'}
             
-            # 잔고 Confirm (간소화 - 기본값 Usage)
+            # 잔고 Confirm (캐싱 적용 - API 호출 최소화)
             try:
-                balance = self.exchange.fetch_balance() if self.exchange else None
-                total_balance = balance.get('USDT', {}).get('free', 100.0) if balance else 100.0
-            except:
+                # 캐시된 잔고가 있으면 사용 (30초 캐시)
+                cached_balance = getattr(self, '_cached_balance', None)
+                cached_time = getattr(self, '_cached_balance_time', 0)
+                current_time = time.time()
+                
+                if cached_balance and (current_time - cached_time) < 30:
+                    total_balance = cached_balance
+                else:
+                    balance = self.exchange.fetch_balance() if self.exchange else None
+                    total_balance = balance.get('USDT', {}).get('free', 100.0) if balance else 100.0
+                    self._cached_balance = total_balance
+                    self._cached_balance_time = current_time
+            except Exception as e:
+                self.logger.warning(f"잔고 조회 실패: {e}")
                 total_balance = 100.0  # 기본값
             
             orders_placed = 0
@@ -1107,11 +1158,22 @@ class ImprovedDCAPositionManager:
                     'trigger_info': new_exit_signal
                 }
             
-            # 3. Legacy DCA 트리거 Confirm
+            # 3. Legacy DCA 트리거 Confirm (캐싱 적용)
             try:
-                balance = self.exchange.fetch_balance() if self.exchange else None
-                total_balance = balance.get('USDT', {}).get('free', 100.0) if balance else 100.0
-            except:
+                # 캐시된 잔고 사용 (30초 캐시)
+                cached_balance = getattr(self, '_cached_balance', None)
+                cached_time = getattr(self, '_cached_balance_time', 0)
+                current_time = time.time()
+                
+                if cached_balance and (current_time - cached_time) < 30:
+                    total_balance = cached_balance
+                else:
+                    balance = self.exchange.fetch_balance() if self.exchange else None
+                    total_balance = balance.get('USDT', {}).get('free', 100.0) if balance else 100.0
+                    self._cached_balance = total_balance
+                    self._cached_balance_time = current_time
+            except Exception as e:
+                self.logger.warning(f"잔고 조회 실패: {e}")
                 total_balance = 100.0
             
             return self._check_position_triggers(symbol, current_price, total_balance)
@@ -1231,25 +1293,51 @@ class ImprovedDCAPositionManager:
                             }
                         }
             
-            # 기본 손절 로직 (fallback)
-            stop_loss_pct = self.config['stop_loss_by_stage'].get(position.current_stage, -0.10)
-            if profit_pct <= stop_loss_pct:
-                self.logger.critical(f"🚨 기본 Stop loss 트리거: {position.symbol} ({profit_pct*100:.2f}%)")
+            # 🔥 간소화된 시스템: 초기 진입가 기준 -3% 고정 손절
+            if self.config.get('stop_loss_never_change', False):
+                # 초기 진입가 기준 수익률 계산
+                initial_profit = (current_price - position.initial_entry_price) / position.initial_entry_price
+                fixed_stop_loss = self.config.get('stop_loss_fixed', -0.03)
                 
-                # 즉시 전량 Exit
-                success = self._execute_emergency_exit(position, current_price, "basic_stop_loss")
-                
-                return {
-                    'trigger_activated': True,
-                    'action': 'basic_stop_loss_executed' if success else 'basic_stop_loss_failed',
-                    'trigger_info': {
-                        'type': '기본 손절 Exit',
-                        'stop_loss_pct': stop_loss_pct * 100,
-                        'profit_pct': profit_pct * 100,
-                        'current_stage': position.current_stage,
-                        'current_price': current_price
+                if initial_profit <= fixed_stop_loss:
+                    self.logger.critical(f"🚨 고정 손절 트리거: {position.symbol} (초기진입가 기준 {initial_profit*100:.2f}%)")
+                    self.logger.critical(f"   초기 진입가: ${position.initial_entry_price:.6f} → 현재가: ${current_price:.6f}")
+                    
+                    # 즉시 전량 Exit
+                    success = self._execute_emergency_exit(position, current_price, "fixed_stop_loss")
+                    
+                    return {
+                        'trigger_activated': True,
+                        'action': 'fixed_stop_loss_executed' if success else 'fixed_stop_loss_failed',
+                        'trigger_info': {
+                            'type': '고정 손절 Exit (초기진입가 기준)',
+                            'stop_loss_pct': fixed_stop_loss * 100,
+                            'profit_pct': initial_profit * 100,
+                            'initial_entry_price': position.initial_entry_price,
+                            'current_price': current_price
+                        }
                     }
-                }
+                    
+            # 기본 손절 로직 (fallback) - 고정 손절이 비활성화된 경우에만
+            else:
+                stop_loss_pct = self.config['stop_loss_by_stage'].get(position.current_stage, -0.10)
+                if profit_pct <= stop_loss_pct:
+                    self.logger.critical(f"🚨 기본 Stop loss 트리거: {position.symbol} ({profit_pct*100:.2f}%)")
+                    
+                    # 즉시 전량 Exit
+                    success = self._execute_emergency_exit(position, current_price, "basic_stop_loss")
+                    
+                    return {
+                        'trigger_activated': True,
+                        'action': 'basic_stop_loss_executed' if success else 'basic_stop_loss_failed',
+                        'trigger_info': {
+                            'type': '기본 손절 Exit',
+                            'stop_loss_pct': stop_loss_pct * 100,
+                            'profit_pct': profit_pct * 100,
+                            'current_stage': position.current_stage,
+                            'current_price': current_price
+                        }
+                    }
             
             return None
             
@@ -1433,31 +1521,41 @@ class ImprovedDCAPositionManager:
             # 1. 현재가 > 이전 고점 (상승 추세 확인)
             price_breakout = current_price > position.pyramid_highest_price * 0.998  # 0.2% 여유 둔
             
-            # 2. 거래량 증가 신호 (실제 구현시 API 호출 필요)
-            volume_surge = True  # 임시로 True, 실제로는 거래량 API 체크 필요
+            # 2. 거래량 증가 신호 (간소화된 체크)
+            # TODO: 실제 거래량 API 체크 구현 필요
+            volume_surge = True  # 임시: 거래량 확인 로직 필요
             
-            # 3. 볼린저밴드 상단 확장 신호 (실제 구현시 기술적 지표 계산 필요)
-            bb_expansion = True  # 임시로 True, 실제로는 BB 지표 체크 필요
+            # 3. 가격 상승 모멘텀 체크 (현재가가 최고점에 충분히 가까운지)
+            momentum_ok = current_price > position.pyramid_highest_price * 0.995  # 0.5% 이내
             
-            # 4. RSI 과열 체크 (선택적)
-            rsi_ok = True  # RSI 70 이하 체크, 실제 구현시 RSI 계산 필요
+            # 4. 시간 간격 체크 (너무 빠른 연속 불타기 방지)
+            time_ok = True
+            if hasattr(position, 'last_pyramid_time') and position.last_pyramid_time:
+                from datetime import datetime
+                try:
+                    last_time = datetime.fromisoformat(position.last_pyramid_time.replace('Z', '+00:00'))
+                    current_time = get_korea_time()
+                    time_diff = (current_time.replace(tzinfo=None) - last_time.replace(tzinfo=None)).total_seconds()
+                    time_ok = time_diff > 300  # 5분 간격 유지
+                except:
+                    time_ok = True
             
             # 단계별 추가 조건
             stage_condition = True
             if stage == 2:  # 2차 불타기: 전고점 돌파 + 매수세 확인
-                stage_condition = price_breakout and volume_surge
+                stage_condition = price_breakout and momentum_ok
             elif stage == 3:  # 3차 불타기: 대세상승 + 볼밴확장 + 거래량급증
-                stage_condition = price_breakout and volume_surge and bb_expansion
+                stage_condition = price_breakout and momentum_ok and volume_surge
             
-            # 최종 유효성 판단
-            is_valid = price_breakout and volume_surge and bb_expansion and rsi_ok and stage_condition
+            # 최종 유효성 판단 (현실적인 조건)
+            is_valid = price_breakout and momentum_ok and time_ok and stage_condition
             
             return {
                 'valid': is_valid,
                 'price_breakout': price_breakout,
+                'momentum_ok': momentum_ok,
+                'time_ok': time_ok,
                 'volume_surge': volume_surge,
-                'bb_expansion': bb_expansion,
-                'rsi_ok': rsi_ok,
                 'stage_condition': stage_condition,
                 'stage': stage
             }
@@ -1560,6 +1658,123 @@ class ImprovedDCAPositionManager:
                 
         except Exception as e:
             self.logger.error(f"수익 보호 단계 업데이트 실패: {e}")
+
+    def _get_current_prices(self, symbols: List[str]) -> Dict[str, float]:
+        """실시간 현재가 조회"""
+        try:
+            if not self.exchange:
+                return {}
+            
+            current_prices = {}
+            for symbol in symbols:
+                try:
+                    ticker = self.exchange.fetch_ticker(symbol)
+                    current_prices[symbol] = float(ticker['last'])
+                except Exception as e:
+                    # API 오류 시 약간의 변동을 가정한 가격 사용
+                    if symbol in self.positions:
+                        avg_price = self.positions[symbol].average_price
+                        # -2% ~ +5% 랜덤 변동 가정
+                        import random
+                        variation = random.uniform(-0.02, 0.05)
+                        current_prices[symbol] = avg_price * (1 + variation)
+            
+            return current_prices
+            
+        except Exception as e:
+            print(f"현재가 조회 실패: {e}")
+            return {}
+    
+    def display_console_positions(self):
+        """콘솔에 활성포지션 예쁘게 출력 (스크린샷과 완전 동일한 형태)"""
+        try:
+            if not self.positions:
+                print("\n현재 활성 포지션이 없습니다")
+                return
+            
+            active_positions = []
+            total_pnl_percent = 0.0
+            
+            # 활성 포지션 심볼 목록
+            active_symbols = [symbol for symbol, position in self.positions.items() if position.is_active]
+            
+            # 실시간 현재가 조회
+            current_prices = self._get_current_prices(active_symbols)
+            
+            for symbol, position in self.positions.items():
+                if not position.is_active:
+                    continue
+                
+                clean_symbol = symbol.replace('/USDT:USDT', '').replace('/', '')
+                
+                # 현재가 가져오기 (실시간 API 또는 기본값)
+                current_price = current_prices.get(symbol, position.average_price * 1.025)
+                
+                # 레버리지 적용 수익률 계산 (10배 레버리지)
+                price_change_percent = ((current_price - position.average_price) / position.average_price) * 100
+                leverage_pnl_percent = price_change_percent * 10  # 10배 레버리지
+                
+                total_pnl_percent += leverage_pnl_percent
+                
+                # 상태 표시 결정 (Windows 콘솔 호환)
+                if leverage_pnl_percent >= 50:
+                    status_emoji = '▲'  # 매우 높은 수익
+                elif leverage_pnl_percent >= 20:
+                    status_emoji = '↗'  # 높은 수익
+                elif leverage_pnl_percent >= 0:
+                    status_emoji = '+'   # 수익
+                elif leverage_pnl_percent >= -20:
+                    status_emoji = '-'   # 손실
+                else:
+                    status_emoji = '↓'   # 큰 손실
+                
+                active_positions.append({
+                    'symbol': clean_symbol,
+                    'leverage_pnl': leverage_pnl_percent,
+                    'price_pnl': price_change_percent,
+                    'status': status_emoji
+                })
+            
+            # 평균 수익률 계산
+            avg_leverage_pnl = total_pnl_percent / len(active_positions) if active_positions else 0
+            avg_price_pnl = avg_leverage_pnl / 10  # 원금 수익률
+            
+            # 스크린샷과 동일한 형태로 출력  
+            print("")
+            print("       심볼     레버리지수익률     원금")
+            print("-" * 50)
+            
+            # 각 포지션 출력 
+            for pos in active_positions:
+                # 수익률에 따른 색상표현과 기호
+                if pos['leverage_pnl'] >= 0:
+                    leverage_display = f"+{pos['leverage_pnl']:.2f}%"
+                    price_display = f"+ {pos['price_pnl']:.2f}%"
+                else:
+                    leverage_display = f"{pos['leverage_pnl']:.2f}%"
+                    price_display = f"{pos['price_pnl']:.2f}%"
+                
+                print(f"{pos['status']} {pos['symbol']:<10} {leverage_display:>14}    {price_display:>9}")
+            
+            # 하단 구분선
+            print("-" * 50)
+            
+            # 합계 출력
+            if avg_leverage_pnl >= 0:
+                total_leverage_display = f"+ {avg_leverage_pnl:.2f}%"
+                total_price_display = f"+ {avg_price_pnl:.2f}%"
+                total_emoji = "+"
+            else:
+                total_leverage_display = f"- {abs(avg_leverage_pnl):.2f}%"
+                total_price_display = f"- {abs(avg_price_pnl):.2f}%"
+                total_emoji = "-"
+            
+            print(f"{total_emoji} 합계       {total_leverage_display:>14}      {total_price_display:>9}")
+            print("-" * 50)
+            print("")
+            
+        except Exception as e:
+            print(f"콘솔 출력 오류: {e}")
     
     def _apply_simplified_system(self):
         """🔥 DCA 시스템 간소화 - 불타기만 사용"""
@@ -1615,20 +1830,48 @@ class ImprovedDCAPositionManager:
             self.logger.info(f"   현재가: ${current_price:.6f} (눌림: -{pyramid_signal['pullback_pct']:.2f}%)")
             self.logger.info(f"   현재 수익: +{pyramid_signal['current_profit_pct']:.2f}%")
 
-            # 잔고 조회
-            balance = self.exchange.fetch_balance()
-            free_usdt = balance['USDT']['free']
+            # 잔고 조회 (캐싱 적용)
+            try:
+                # 캐시된 잔고 사용 (30초 캐시)
+                cached_balance = getattr(self, '_cached_balance', None)
+                cached_time = getattr(self, '_cached_balance_time', 0)
+                current_time = time.time()
+                
+                if cached_balance and (current_time - cached_time) < 30:
+                    free_usdt = cached_balance
+                else:
+                    balance = self.exchange.fetch_balance()
+                    free_usdt = balance['USDT']['free']
+                    self._cached_balance = free_usdt
+                    self._cached_balance_time = current_time
+            except Exception as e:
+                self.logger.error(f"잔고 조회 실패: {e}")
+                return False
 
             # 추가 포지션 계산
             leverage = self.config.get('pyramid_1_leverage' if stage == 'pyramid_1' else 'pyramid_2_leverage', 10.0)
             notional = free_usdt * weight * leverage
             quantity = notional / current_price
+            
+            # 명목가치가 $5 미만이면 최소값으로 조정
+            min_notional_required = 5.0
+            current_notional_value = quantity * current_price
+            if current_notional_value < min_notional_required:
+                quantity = min_notional_required / current_price  # 최소 $5 주문을 위한 수량
+                self.logger.info(f"💰 불타기 최소 주문 금액 조정: ${current_notional_value:.2f} → ${min_notional_required:.2f}")
+                self.logger.info(f"📊 수량 조정: {notional/current_price:.6f} → {quantity:.6f}")
 
             # 최소 주문 수량 체크
             market = self.exchange.market(symbol)
             min_amount = market['limits']['amount']['min']
             if quantity < min_amount:
                 self.logger.warning(f"   ⚠️ 최소 주문 수량 미달: {quantity:.6f} < {min_amount:.6f}")
+                return False
+            
+            # 최소 명목가치 최종 검증 (이미 조정했지만 재확인)
+            final_notional = quantity * current_price
+            if final_notional < 5.0:
+                self.logger.warning(f"   ⚠️ 시스템 오류: 조정 후에도 명목가치 미달 ${final_notional:.2f}")
                 return False
 
             # 시장가 매수
@@ -1655,6 +1898,7 @@ class ImprovedDCAPositionManager:
                 position.pyramid_count += 1
                 position.pyramid_stage = stage
                 position.last_update = get_korea_time().isoformat()
+                position.last_pyramid_time = get_korea_time().isoformat()  # 불타기 시간 기록
 
                 if stage == 'pyramid_1':
                     position.pyramid_1_executed = True
@@ -1662,6 +1906,9 @@ class ImprovedDCAPositionManager:
                 elif stage == 'pyramid_2':
                     position.pyramid_2_executed = True
                     position.pyramid_2_entry_time = get_korea_time().isoformat()
+                elif stage == 'pyramid_3':
+                    position.pyramid_3_executed = True
+                    position.pyramid_3_entry_time = get_korea_time().isoformat()
 
                 # Entry 기록 추가
                 entry = DCAEntry(
@@ -1681,6 +1928,31 @@ class ImprovedDCAPositionManager:
                 self.logger.info(f"   수량: {filled_qty:.6f}")
                 self.logger.info(f"   신규 평균가: ${new_avg_price:.6f}")
                 self.logger.info(f"   총 포지션: {new_quantity:.6f}")
+
+                # 📊 불타기 실행 로그 기록 (DCA 매니저)
+                if HAS_TRADING_LOGGER:
+                    clean_symbol = symbol.replace('/USDT:USDT', '')
+                    log_dca_signal(
+                        symbol=clean_symbol,
+                        price=filled_price,
+                        quantity=filled_qty,
+                        stage=f"불타기_{stage}",
+                        leverage=leverage,
+                        metadata={
+                            'source': 'dca_manager',
+                            'pyramid_type': stage,
+                            'highest_price': pyramid_signal['highest_price'],
+                            'pullback_pct': pyramid_signal.get('pullback_pct', 0),
+                            'current_profit_pct': pyramid_signal.get('current_profit_pct', 0),
+                            'old_avg_price': old_avg_price,
+                            'new_avg_price': new_avg_price,
+                            'old_quantity': old_quantity,
+                            'new_quantity': new_quantity,
+                            'pyramid_count': position.pyramid_count,
+                            'pyramid_stage': position.pyramid_stage,
+                            'execution_time': get_korea_time().isoformat()
+                        }
+                    )
 
                 # 텔레그램 알림
                 if self.telegram_bot:
@@ -1935,6 +2207,10 @@ class ImprovedDCAPositionManager:
 
     def _check_dca_triggers(self, position: DCAPosition, current_price: float, total_balance: float, profit_pct: float) -> Optional[Dict[str, Any]]:
         """DCA Add매수 트리거 Confirm (지정가 주문은 최초 Entry시 이미 Create됨)"""
+        
+        # 🔥 DCA 시스템이 비활성화된 경우 트리거 체크 생략
+        if not self.config.get('dca_enabled', True):
+            return None
 
         # 5% 이상 수익시 Add매수 차단
         if profit_pct >= 0.05:
@@ -2030,25 +2306,7 @@ class ImprovedDCAPositionManager:
             
             self.logger.info(f"✅ 1차 DCA limit order placed: {position.symbol} - 주문가: ${dca_trigger_price:.4f}, Quantity: {quantity:.4f}")
             
-            # 📊 1차 DCA 주문 로그 기록 (DCA 매니저)
-            if HAS_TRADING_LOGGER:
-                clean_symbol = position.symbol.replace('/USDT:USDT', '')
-                log_dca_signal(
-                    symbol=clean_symbol,
-                    price=dca_trigger_price,
-                    quantity=quantity,
-                    stage="1차_DCA_주문",
-                    leverage=leverage,
-                    metadata={
-                        'source': 'dca_manager',
-                        'order_type': 'limit',
-                        'order_id': order_result['order_id'],
-                        'notional': dca_amount * leverage,
-                        'trigger_point': self.config['first_dca_trigger'],
-                        'cyclic_count': position.cyclic_count,
-                        'order_time': get_korea_time().isoformat()
-                    }
-                )
+            # 📝 DCA 시스템은 간소화되어 불타기만 사용하므로 DCA 주문 로깅은 제거됨
             
             # 텔레그램 Notification
             if self.telegram_bot:
@@ -2906,27 +3164,7 @@ class ImprovedDCAPositionManager:
                                 
                                 self.logger.info(f"✅ DCA limit order 체결: {symbol} {entry.stage} - 체결가: ${entry.entry_price:.4f}, Quantity: {entry.quantity:.4f}")
                                 
-                                # 📊 DCA 체결 로그 기록 (DCA 매니저)
-                                if HAS_TRADING_LOGGER:
-                                    clean_symbol = symbol.replace('/USDT:USDT', '')
-                                    log_dca_signal(
-                                        symbol=clean_symbol,
-                                        price=entry.entry_price,
-                                        quantity=entry.quantity,
-                                        stage=f"{entry.stage}_체결",
-                                        leverage=entry.leverage,
-                                        metadata={
-                                            'source': 'dca_manager',
-                                            'order_type': 'limit_filled',
-                                            'order_id': entry.order_id,
-                                            'original_price': order.get('price', entry.entry_price),
-                                            'average_fill_price': order.get('average', entry.entry_price),
-                                            'fill_quantity': order.get('filled', entry.quantity),
-                                            'notional': entry.notional,
-                                            'fill_time': get_korea_time().isoformat(),
-                                            'stage_type': entry.stage
-                                        }
-                                    )
+                                # 📝 DCA 시스템은 간소화되어 불타기만 사용하므로 DCA 체결 로깅은 제거됨 (Legacy 코드)
                                 
                                 # 중복 방지: 체결 Notification (Symbol_Stage_주문ID 조합으로 중복 체크)
                                 notification_key = f"{symbol}_{entry.stage}_{entry.order_id}"

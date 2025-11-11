@@ -22,11 +22,11 @@ try:
     from trading_signal_logger import get_trading_logger, TradingSignal
     TRADING_LOGGER_AVAILABLE = True
     trading_logger = get_trading_logger()
-    print("✅ 거래 로깅 시스템 연동 완료")
+    print("[SUCCESS] 거래 로깅 시스템 연동 완료")
 except ImportError:
     TRADING_LOGGER_AVAILABLE = False
     trading_logger = None
-    print("⚠️ 거래 로깅 시스템 없음 - 로깅 기능 비활성화")
+    print("[WARNING] 거래 로깅 시스템 없음 - 로깅 기능 비활성화")
 
 def log_entry_signal(symbol: str, strategy: str, price: float, quantity: float, 
                     leverage: float = 10.0, metadata: Optional[Dict] = None):
@@ -51,7 +51,7 @@ def log_entry_signal(symbol: str, strategy: str, price: float, quantity: float,
             metadata=enhanced_metadata
         )
         
-        print(f"📊 진입 신호 로그: {symbol} {strategy}전략 @ ${price:,.4f}")
+        print(f"[SIGNAL] 진입 신호 로그: {symbol} {strategy}전략 @ ${price:,.4f}")
         
     except Exception as e:
         logging.error(f"진입 신호 로그 실패: {e}")
@@ -92,7 +92,7 @@ def log_exit_signal(symbol: str, price: float, entry_price: float, quantity: flo
             metadata=enhanced_metadata
         )
         
-        print(f"📊 청산 신호 로그: {symbol} @ ${price:,.4f} ({status})")
+        print(f"[SIGNAL] 청산 신호 로그: {symbol} @ ${price:,.4f} ({status})")
         
     except Exception as e:
         logging.error(f"청산 신호 로그 실패: {e}")
@@ -120,7 +120,7 @@ def log_dca_signal(symbol: str, price: float, quantity: float, stage: str = "DCA
             metadata=enhanced_metadata
         )
         
-        print(f"📊 DCA 신호 로그: {symbol} {stage} @ ${price:,.4f}")
+        print(f"[SIGNAL] DCA 신호 로그: {symbol} {stage} @ ${price:,.4f}")
         
     except Exception as e:
         logging.error(f"DCA 신호 로그 실패: {e}")
@@ -148,7 +148,7 @@ def log_custom_signal(symbol: str, strategy: str, action: str, price: float,
         )
         
         trading_logger.log_signal(signal)
-        print(f"📊 커스텀 신호 로그: {symbol} {action} @ ${price:,.4f}")
+        print(f"[SIGNAL] 커스텀 신호 로그: {symbol} {action} @ ${price:,.4f}")
         
     except Exception as e:
         logging.error(f"커스텀 신호 로그 실패: {e}")
@@ -223,7 +223,7 @@ def log_trade_complete(symbol: str, strategy: str, entry_price: float, exit_pric
 
 # 사용 예시 및 테스트
 if __name__ == "__main__":
-    print("🧪 전략 연동 패치 테스트")
+    print("[TEST] 전략 연동 패치 테스트")
     
     # 진입 테스트
     log_entry_signal("BTCUSDT", "A", 91000.0, 0.1)
@@ -241,7 +241,7 @@ if __name__ == "__main__":
     perf = get_strategy_performance()
     print(f"전략 성과: {perf}")
     
-    print("✅ 테스트 완료")
+    print("[SUCCESS] 테스트 완료")
 
 """
 메인 전략 파일 적용 예시:

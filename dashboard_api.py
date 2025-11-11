@@ -13,6 +13,15 @@ import os
 import json
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
+
+# Binance Rate Limiter 추가 (IP 차단 방지)
+try:
+    from binance_rate_limiter import BinanceRateLimiter
+    HAS_RATE_LIMITER = True
+    print("[INFO] 대시보드 API - Binance Rate Limiter 로드 완료")
+except ImportError:
+    print("[WARNING] 대시보드 API - binance_rate_limiter.py 없음, Rate Limiting 비활성화")
+    HAS_RATE_LIMITER = False
 import threading
 import time
 from collections import defaultdict
@@ -28,20 +37,31 @@ api_key = os.getenv('BINANCE_API_KEY')
 api_secret = os.getenv('BINANCE_SECRET_KEY')
 
 if not api_key or not api_secret:
-    print("⚠️ WARNING: BINANCE_API_KEY or BINANCE_SECRET_KEY not found in .env")
+    print("[WARNING] BINANCE_API_KEY or BINANCE_SECRET_KEY not found in .env")
     print("API will run in DEMO mode with sample data")
     DEMO_MODE = True
+    rate_limiter = None
 else:
     try:
         client = Client(api_key, api_secret)
         # Futures 계정 확인
         client.futures_account()
+        
+        # Rate Limiter 초기화
+        if HAS_RATE_LIMITER:
+            rate_limiter = BinanceRateLimiter()
+            print("[SUCCESS] Binance Rate Limiter 초기화 완료")
+        else:
+            rate_limiter = None
+            print("[WARNING] Rate Limiter 없음 - IP 차단 위험")
+        
         DEMO_MODE = False
-        print("✅ Binance Futures API connected successfully")
+        print("[SUCCESS] Binance Futures API connected successfully")
     except Exception as e:
-        print(f"⚠️ Binance API connection failed: {e}")
+        print(f"[WARNING] Binance API connection failed: {e}")
         print("API will run in DEMO mode with sample data")
         DEMO_MODE = True
+        rate_limiter = None
 
 # 캐시 데이터
 cache = {
@@ -62,9 +82,27 @@ def get_korea_time():
     """한국 표준시(KST) 현재 시간 반환"""
     return datetime.now(timezone(timedelta(hours=9)))
 
+def _parse_strategy_info(strategy_str):
+    """전략 정보 파싱 (중복 제거 및 정확한 분류)"""
+    if not strategy_str or strategy_str == 'UNKNOWN':
+        return 'UNKNOWN'
+    
+    # [A전략(3분봉 바닥급등타점)] 형태 파싱
+    if isinstance(strategy_str, str):
+        if 'A전략' in strategy_str:
+            return 'A'
+        elif 'B전략' in strategy_str:
+            return 'B'
+        elif 'C전략' in strategy_str:
+            return 'C'
+        elif strategy_str in ['A', 'B', 'C']:
+            return strategy_str
+    
+    return 'UNKNOWN'
+
 
 def get_account_balance():
-    """계좌 잔고 정보 가져오기"""
+    """계좌 잔고 정보 가져오기 (Rate Limiter 적용)"""
     if DEMO_MODE:
         return {
             'totalWalletBalance': 12450.80,
@@ -73,7 +111,17 @@ def get_account_balance():
         }
 
     try:
+        # Rate Limiting 체크
+        if rate_limiter and not rate_limiter.wait_if_needed('/fapi/v2/account'):
+            print("[ERROR] Rate limit exceeded - account balance request denied")
+            return None
+        
         account = client.futures_account()
+        
+        # Rate Limiting 기록
+        if rate_limiter:
+            rate_limiter.record_request('/fapi/v2/account')
+        
         return {
             'totalWalletBalance': float(account['totalWalletBalance']),
             'totalUnrealizedProfit': float(account['totalUnrealizedProfit']),
@@ -81,6 +129,11 @@ def get_account_balance():
         }
     except Exception as e:
         print(f"Error fetching account balance: {e}")
+        # Rate Limiting 에러 기록
+        if rate_limiter and hasattr(e, 'response'):
+            status_code = getattr(e.response, 'status_code', 0) if e.response else 0
+            if status_code:
+                rate_limiter.record_error(status_code)
         return None
 
 
@@ -101,36 +154,23 @@ def load_dca_positions():
 def get_open_positions():
     """현재 보유 중인 포지션 가져오기 (Binance API + DCA 데이터 결합)"""
     if DEMO_MODE:
-        return [
-            {
-                'symbol': 'BTCUSDT',
-                'positionAmt': 0.15,
-                'entryPrice': 88250.0,
-                'markPrice': 91295.0,
-                'unRealizedProfit': 457.50,
-                'leverage': 3,
-                'positionSide': 'LONG',
-                'strategy': 'A',
-                'dcaStage': 'INITIAL',
-                'cyclicCount': 0
-            },
-            {
-                'symbol': 'ETHUSDT',
-                'positionAmt': 2.5,
-                'entryPrice': 3125.0,
-                'markPrice': 3182.0,
-                'unRealizedProfit': 142.50,
-                'leverage': 3,
-                'positionSide': 'LONG',
-                'strategy': 'B',
-                'dcaStage': 'FIRST_DCA',
-                'cyclicCount': 1
-            }
-        ]
+        # DEMO 모드에서는 빈 배열 반환 - 샘플 데이터 제거
+        print("[INFO] DEMO mode - returning empty positions array")
+        return []
 
     try:
+        # Rate Limiting 체크
+        if rate_limiter and not rate_limiter.wait_if_needed('/fapi/v2/positionRisk'):
+            print("[ERROR] Rate limit exceeded - position request denied")
+            return []
+        
         # Binance API에서 실제 포지션 가져오기
         positions = client.futures_position_information()
+        
+        # Rate Limiting 기록
+        if rate_limiter:
+            rate_limiter.record_request('/fapi/v2/positionRisk')
+        
         open_positions = []
 
         # DCA 포지션 데이터 로드
@@ -144,8 +184,19 @@ def get_open_positions():
                 mark_price = float(pos['markPrice'])
                 unrealized_pnl = float(pos['unRealizedProfit'])
 
-                # DCA 데이터와 결합
-                dca_info = dca_data.get(symbol, {})
+                # DCA 데이터와 결합 (심볼 형식 매칭)
+                # Binance API: "BTCUSDT" vs DCA: "BTC/USDT:USDT" 형식 차이 해결
+                dca_symbol_formats = [
+                    symbol,  # 원본 형식 시도
+                    f"{symbol[:-4]}/{symbol[-4:]}:USDT" if symbol.endswith('USDT') else symbol,  # BTC/USDT:USDT 형식
+                    f"{symbol[:-4]}/{symbol[-4:]}" if symbol.endswith('USDT') else symbol  # BTC/USDT 형식
+                ]
+                
+                dca_info = {}
+                for fmt in dca_symbol_formats:
+                    if fmt in dca_data:
+                        dca_info = dca_data[fmt]
+                        break
 
                 position_data = {
                     'symbol': symbol,
@@ -155,8 +206,8 @@ def get_open_positions():
                     'unRealizedProfit': unrealized_pnl,
                     'leverage': int(pos['leverage']),
                     'positionSide': pos['positionSide'],
-                    # DCA 추가 정보
-                    'strategy': dca_info.get('strategy', 'UNKNOWN'),
+                    # 전략 정보 개선
+                    'strategy': _parse_strategy_info(dca_info.get('strategy', 'UNKNOWN')),
                     'dcaStage': dca_info.get('current_stage', 'UNKNOWN'),
                     'cyclicCount': dca_info.get('cyclic_count', 0),
                     'totalNotional': dca_info.get('total_notional', abs(position_amt * mark_price)),
@@ -170,16 +221,107 @@ def get_open_positions():
         return open_positions
     except Exception as e:
         print(f"Error fetching positions: {e}")
+        # Rate Limiting 에러 기록
+        if rate_limiter and hasattr(e, 'response'):
+            status_code = getattr(e.response, 'status_code', 0) if e.response else 0
+            if status_code:
+                rate_limiter.record_error(status_code)
         return []
 
 
 def get_recent_signals():
-    """최근 신호 로그 읽기 (실제 데이터 연동)"""
+    """최근 신호 로그 읽기 (실제 데이터 연동 + 중복 제거)"""
     try:
         # 거래 로거 사용하여 실제 데이터 가져오기
         from trading_signal_logger import get_trading_logger
         logger = get_trading_logger()
-        return logger.get_recent_signals(50)
+        raw_signals = logger.get_recent_signals(50)
+        
+        # 시간 형식을 대시보드용으로 변환 및 중복 제거
+        processed_signals = []
+        seen_signals = set()  # 중복 체크용
+        
+        # 소스 우선순위 기반 중복 제거 (alpha_z_strategy > dca_manager > others)
+        signal_priority_map = {}  # key -> (priority, signal)
+        
+        for signal in raw_signals:
+            action = signal.get('action', '')
+            strategy = signal.get('strategy', '')
+            source = signal.get('metadata', {}).get('source', '')
+            symbol = signal.get('symbol', '')
+            
+            # DCA 매니저에서 오는 중복 신호는 우선순위가 낮음
+            if strategy == 'DCA' and source == 'dca_manager':
+                continue  # DCA 전략은 완전히 제외
+            
+            # 전략 분류 정확히 파싱 
+            original_strategy = strategy  # 원본 보존
+            if strategy and strategy.startswith('[') and strategy.endswith(']'):
+                # [A전략(3분봉 바닥급등타점)] 형태에서 A 추출
+                if 'A전략' in strategy:
+                    signal['strategy'] = 'A'
+                elif 'B전략' in strategy:
+                    signal['strategy'] = 'B'
+                elif 'C전략' in strategy:
+                    signal['strategy'] = 'C'
+                else:
+                    signal['strategy'] = 'A'  # 기본값
+            elif strategy in ['A', 'B', 'C']:
+                # 이미 올바른 형태면 그대로 유지
+                pass
+            else:
+                # 기타 경우에는 A로 기본 설정
+                signal['strategy'] = 'A'
+            
+            # 불타기 관련 액션 용어 변경
+            if action == 'BUY' and source == 'dca_manager':
+                signal['action'] = '불타기 진입'
+                signal['status'] = '불타기 완료'
+            
+            # 중복 체크 키 생성 (심볼 + 전략 + 시간(분 단위))
+            timestamp_key = signal.get('timestamp', '')
+            if 'T' in timestamp_key and ':' in timestamp_key:
+                try:
+                    # YYYY-MM-DD HH:MM 형태로 변환 (분 단위 그룹핑)
+                    time_part = timestamp_key.split('T')[1].split(':')
+                    hour = time_part[0]
+                    minute = time_part[1]
+                    timestamp_key = f"{hour}:{minute}"
+                except:
+                    timestamp_key = timestamp_key[:16]  # YYYY-MM-DD HH:MM
+            
+            duplicate_key = f"{symbol}_{signal.get('strategy', '')}_{timestamp_key}_{action}"
+            
+            # 소스별 우선순위 설정 (높은 숫자가 높은 우선순위)
+            if source == 'alpha_z_strategy':
+                priority = 3  # 최고 우선순위
+            elif source == 'telegram_signal':
+                priority = 2
+            elif source == 'dca_manager':
+                priority = 1  # 최저 우선순위
+            else:
+                priority = 2  # 기본 우선순위
+            
+            # 중복 신호 우선순위 처리
+            if duplicate_key not in signal_priority_map or signal_priority_map[duplicate_key][0] < priority:
+                signal_priority_map[duplicate_key] = (priority, signal)
+        
+        # 우선순위가 높은 신호들만 선택
+        for priority, signal in signal_priority_map.values():
+            # ISO 형식을 일반 형식으로 변환
+            if 'timestamp' in signal:
+                try:
+                    # ISO 형식에서 datetime으로 파싱 후 한국 시간 형식으로 변환
+                    if 'T' in signal['timestamp'] and '+' in signal['timestamp']:
+                        from dateutil.parser import parse
+                        dt = parse(signal['timestamp'])
+                        signal['timestamp'] = dt.strftime('%Y-%m-%d %H:%M:%S')
+                except:
+                    pass  # 파싱 실패시 원본 유지
+                    
+            processed_signals.append(signal)
+        
+        return processed_signals
         
     except ImportError:
         print("[WARNING] trading_signal_logger not available - using file reading")
@@ -190,44 +332,29 @@ def get_recent_signals():
             try:
                 with open(LOG_FILE, 'r', encoding='utf-8') as f:
                     lines = f.readlines()[-50:]  # 최근 50개
-                    for line in lines:
+                    for line_num, line in enumerate(lines, 1):
                         try:
-                            signal = json.loads(line.strip())
-                            signals.append(signal)
-                        except:
+                            line = line.strip()
+                            if line:  # 빈 줄 제외
+                                signal = json.loads(line)
+                                # 필수 필드 확인
+                                if all(key in signal for key in ['timestamp', 'symbol', 'strategy']):
+                                    signals.append(signal)
+                        except json.JSONDecodeError as e:
+                            print(f"[WARNING] JSON parse error at line {line_num}: {e}")
                             continue
+                        except Exception as e:
+                            print(f"[WARNING] Signal processing error at line {line_num}: {e}")
+                            continue
+                            
+                print(f"[INFO] Successfully loaded {len(signals)} signals from log file")
             except Exception as e:
-                print(f"Error reading signal log: {e}")
+                print(f"[ERROR] Error reading signal log: {e}")
 
-        # 실제 로그가 없으면 샘플 데이터 (개발/테스트용)
+        # 실제 로그가 없으면 빈 배열 반환 - 샘플 데이터 제거
         if not signals:
-            print("[INFO] No real signals found - using sample data for demo")
-            signals = [
-                {
-                    'timestamp': '2025-11-10 14:28:30',
-                    'symbol': 'SOLUSDT',
-                    'strategy': 'A',
-                    'action': 'BUY',
-                    'price': 215.80,
-                    'status': '진입완료'
-                },
-                {
-                    'timestamp': '2025-11-10 14:15:12',
-                    'symbol': 'BNBUSDT',
-                    'strategy': 'C',
-                    'action': 'SELL',
-                    'price': 645.30,
-                    'status': '익절 +4.2%'
-                },
-                {
-                    'timestamp': '2025-11-10 13:58:45',
-                    'symbol': 'ADAUSDT',
-                    'strategy': 'B',
-                    'action': 'BUY',
-                    'price': 1.082,
-                    'status': '진입완료'
-                }
-            ]
+            print("[INFO] No real signals found - returning empty array")
+            signals = []
 
         return signals
 
@@ -280,32 +407,7 @@ def calculate_strategy_stats():
             else:
                 stats[key]['win_rate'] = 0.0
 
-        # 실제 데이터가 없으면 샘플 데이터 (개발/테스트용)
-        if all(s['total_trades'] == 0 for s in stats.values()):
-            print("[INFO] No real trade history found - using sample data for demo")
-            return {
-                'strategy_a': {
-                    'win_count': 12,
-                    'loss_count': 4,
-                    'total_return': 18.5,
-                    'win_rate': 75.0,
-                    'total_trades': 16
-                },
-                'strategy_b': {
-                    'win_count': 8,
-                    'loss_count': 4,
-                    'total_return': 12.3,
-                    'win_rate': 66.7,
-                    'total_trades': 12
-                },
-                'strategy_c': {
-                    'win_count': 6,
-                    'loss_count': 4,
-                    'total_return': 9.8,
-                    'win_rate': 60.0,
-                    'total_trades': 10
-                }
-            }
+        # 실제 데이터만 사용 - 샘플 데이터 제거
 
         return stats
 
@@ -331,9 +433,9 @@ def update_cache():
             dca_count = len(cache['dca_positions'])
             signal_count = len(cache['recent_signals'])
 
-            print(f"✅ Cache updated at {cache['last_update']} | Positions: {position_count} | DCA: {dca_count} | Signals: {signal_count}")
+            print(f"[CACHE] Updated at {cache['last_update']} | Positions: {position_count} | DCA: {dca_count} | Signals: {signal_count}")
         except Exception as e:
-            print(f"❌ Cache update error: {e}")
+            print(f"[ERROR] Cache update error: {e}")
 
         time.sleep(3)  # 3초마다 업데이트 (실시간성 개선)
 
@@ -398,7 +500,7 @@ if __name__ == '__main__':
     cache_thread.start()
 
     print("\n" + "="*50)
-    print("🚀 Alpha-Z Trading Dashboard API Server")
+    print("Alpha-Z Trading Dashboard API Server")
     print("="*50)
     print(f"Mode: {'DEMO' if DEMO_MODE else 'LIVE'}")
     print(f"Server: http://0.0.0.0:5000")

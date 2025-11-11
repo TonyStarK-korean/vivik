@@ -34,7 +34,7 @@ A전략(3분봉 바닥급등타점) + B전략(15분봉 급등초입) + C전략(3
   * 예: 2.5% 수익 도달 → 2.0%로 하락 시 청산 (1.0% 이익 확보)
 
 전략 조건:
-A전략(3분봉 바닥급등타점): 4개 조건 - (500봉이내 MA80-MA480 골든크로스 or MA80<MA480) + 500봉이내 BB80-BB480 골든크로스 + 60봉이내 MA5-MA80 골든크로스 + 5봉이내 종가<MA5 골든크로스
+A전략(3분봉 바닥급등타점): 5개 조건 - (500봉이내 MA80-MA480 골든크로스 or MA80<MA480) + 500봉이내 BB80-BB480 골든크로스 + 5봉이내 MA5-MA80 골든크로스 + 5봉이내 종가<MA5 골든크로스 + 현재 MA5>MA20
 B전략(15분봉 급등초입): 6개 조건 - 200봉이내 MA80-MA480 골든크로스 + BB골든크로스 + MA5-MA20골든크로스 + BB200상단-MA480 상향돌파 + MA20-MA80 데드크로스 or 이격도조건 + 시가대비고가 3%이상
 C전략(30분봉 급등맥점): 2개 기본조건 + 3개 타점(A/B/C) - 기본조건(50봉이내 MA80-MA480 골든크로스 or MA80<MA480 + 100봉이내 MA480-BB200 크로스) + A/B/C 타점 중 1개
 """
@@ -78,6 +78,15 @@ except ImportError:
             pass
         def send_message(self, message):
             pass
+
+# Binance Rate Limiter 추가 (IP 차단 방지)
+try:
+    from binance_rate_limiter import RateLimitedExchange, BinanceRateLimiter
+    HAS_RATE_LIMITER = True
+    print("[INFO] Binance Rate Limiter 로드 완료")
+except ImportError:
+    print("[WARNING] binance_rate_limiter.py 없음 - Rate Limiting 비활성화")
+    HAS_RATE_LIMITER = False
 
 try:
     from improved_dca_position_manager import ImprovedDCAPositionManager
@@ -141,16 +150,24 @@ class FifteenMinuteMegaStrategy:
         self.sandbox = sandbox
         self.logger = self._setup_logger()
         
-        # Exchange 설정 (공개 API + 프라이빗 API 분리)
+        # Exchange 설정 (Rate Limiter 적용으로 IP 차단 방지)
         # 공개 API (스캔용)
-        self.exchange = ccxt.binance({
+        raw_exchange = ccxt.binance({
             'enableRateLimit': True,
             'options': {'defaultType': 'future'}
         })
         
+        # Rate Limiter 래퍼 적용
+        if HAS_RATE_LIMITER:
+            self.exchange = RateLimitedExchange(raw_exchange, self.logger)
+            print("[INFO] 공개 API - Rate Limiter 적용 완료")
+        else:
+            self.exchange = raw_exchange
+            print("[WARNING] 공개 API - Rate Limiter 없음")
+        
         # 프라이빗 API (거래용)
         if HAS_BINANCE_CONFIG and BinanceConfig.API_KEY:
-            self.private_exchange = ccxt.binance({
+            raw_private_exchange = ccxt.binance({
                 'apiKey': BinanceConfig.API_KEY,
                 'secret': BinanceConfig.SECRET_KEY,
                 'sandbox': sandbox,
@@ -160,7 +177,14 @@ class FifteenMinuteMegaStrategy:
                     'warnOnFetchOpenOrdersWithoutSymbol': False  # 경고 메시지 억제
                 }
             })
-            print("[INFO] 프라이빗 API 초기화 완료")
+            
+            # Rate Limiter 래퍼 적용
+            if HAS_RATE_LIMITER:
+                self.private_exchange = RateLimitedExchange(raw_private_exchange, self.logger)
+                print("[INFO] 프라이빗 API - Rate Limiter 적용 완료")
+            else:
+                self.private_exchange = raw_private_exchange
+                print("[WARNING] 프라이빗 API - Rate Limiter 없음")
         else:
             self.private_exchange = None
             print("[WARN] 프라이빗 API 없음 - 거래 기능 비활성화")
@@ -269,23 +293,23 @@ class FifteenMinuteMegaStrategy:
 
                 # 3개 전략 모두 신호인 경우
                 if a_signal and b_signal and c_signal:
-                    return "[A+B+C전략]"
+                    return "[A+B+C전략(3분+15분+30분 트리플 신호)]"
 
                 # 2개 전략 조합인 경우
                 elif a_signal and b_signal:
-                    return "[A+B전략]"
+                    return "[A+B전략(3분봉바닥급등+15분봉급등초입)]"
                 elif a_signal and c_signal:
-                    return "[A+C전략]"
+                    return "[A+C전략(3분봉바닥급등+30분봉급등맥점)]"
                 elif b_signal and c_signal:
-                    return "[B+C전략]"
+                    return "[B+C전략(15분봉급등초입+30분봉급등맥점)]"
 
-                # 단일 전략인 경우
+                # 단일 전략인 경우 - 자세한 명칭 표시
                 elif a_signal:
-                    return "[A전략]"
+                    return "[A전략(3분봉 바닥급등타점)]"
                 elif b_signal:
-                    return "[B전략]"
+                    return "[B전략(15분봉 급등초입)]"
                 elif c_signal:
-                    return "[C전략]"
+                    return "[C전략(30분봉 급등맥점)]"
 
             return "[전략미상]"
         except:
@@ -1274,13 +1298,13 @@ class FifteenMinuteMegaStrategy:
                 conditions.append(f"[A전략 조건2] BB80-BB480 골든크로스 계산 실패: {e}")
                 condition2 = False
             
-            # 조건 3: 60봉이내 MA5-MA80 골든크로스
+            # 조건 3: 5봉이내 MA5-MA80 골든크로스
             condition3 = False
             condition3_detail = "골든크로스 없음"
             
             try:
-                if len(df_calc) >= 61:
-                    for i in range(1, min(61, len(df_calc))):
+                if len(df_calc) >= 6:
+                    for i in range(1, min(6, len(df_calc))):
                         prev_idx = -(i+1)
                         curr_idx = -i
                         
@@ -1299,7 +1323,7 @@ class FifteenMinuteMegaStrategy:
                             condition3_detail = f"{i}봉전 MA5-MA80 골든크로스"
                             break
                             
-                conditions.append(f"[A전략 조건3] 60봉이내 MA5-MA80 골든크로스 ({condition3_detail}): {condition3}")
+                conditions.append(f"[A전략 조건3] 5봉이내 MA5-MA80 골든크로스 ({condition3_detail}): {condition3}")
             except Exception as e:
                 conditions.append(f"[A전략 조건3] MA5-MA80 골든크로스 계산 실패: {e}")
                 condition3 = False
@@ -1334,9 +1358,28 @@ class FifteenMinuteMegaStrategy:
                 conditions.append(f"[A전략 조건4] 종가<MA5 골든크로스 계산 실패: {e}")
                 condition4 = False
             
+            # 조건 5: 현재 MA5 > MA20
+            condition5 = False
+            condition5_detail = "MA5 ≤ MA20"
             
-            # A전략 최종 신호 판정: 4개 조건 모두 True여야 함
-            strategy_a_signal = condition1 and condition2 and condition3 and condition4
+            try:
+                ma5_current = df_calc['ma5'].iloc[-1]
+                ma20_current = df_calc['ma20'].iloc[-1]
+                
+                if pd.notna(ma5_current) and pd.notna(ma20_current) and ma5_current > ma20_current:
+                    condition5 = True
+                    condition5_detail = f"MA5({ma5_current:.2f}) > MA20({ma20_current:.2f})"
+                else:
+                    condition5_detail = f"MA5({ma5_current:.2f}) ≤ MA20({ma20_current:.2f})"
+                    
+                conditions.append(f"[A전략 조건5] 현재 MA5>MA20 ({condition5_detail}): {condition5}")
+            except Exception as e:
+                conditions.append(f"[A전략 조건5] MA5>MA20 조건 계산 실패: {e}")
+                condition5 = False
+            
+            
+            # A전략 최종 신호 판정: 5개 조건 모두 True여야 함
+            strategy_a_signal = condition1 and condition2 and condition3 and condition4 and condition5
             
             return strategy_a_signal, conditions
             
@@ -2910,6 +2953,10 @@ class FifteenMinuteMegaStrategy:
     
     def execute_trade(self, signal_data):
         """실전매매 거래 실행"""
+        # 변수 초기화 (에러 처리에서 안전하게 사용하기 위해)
+        free_usdt = 0.0
+        position_value = 0.0
+        
         try:
             if not self.private_exchange:
                 print(f"⚠️ 프라이빗 API 없음 - {signal_data['clean_symbol']} 거래 건너뛰기")
@@ -2942,6 +2989,16 @@ class FifteenMinuteMegaStrategy:
             position_value = free_usdt * 0.010  # 1.0% (초기 진입)
             leverage = 10
             quantity = (position_value * leverage) / price  # 실제 구매할 수량
+            
+            # 명목가치가 $5 미만이면 최소값으로 조정
+            min_notional_required = 5.0
+            current_notional = quantity * price
+            if current_notional < min_notional_required:
+                quantity = min_notional_required / price  # 최소 $5 주문을 위한 수량
+                actual_position_value = (quantity * price) / leverage  # 실제 투입되는 원금
+                self.logger.info(f"💰 최소 주문 금액 조정: ${current_notional:.2f} → ${min_notional_required:.2f}")
+                self.logger.info(f"📊 원금 비중 조정: {position_value/free_usdt*100:.2f}% → {actual_position_value/free_usdt*100:.2f}%")
+                position_value = actual_position_value
             
             
             if free_usdt < position_value:
@@ -2984,12 +3041,36 @@ class FifteenMinuteMegaStrategy:
                 self._send_notification_once(symbol, "min_amount_insufficient", detailed_msg)
                 return False
             
-            # 레버리지 설정
+            # 최소 명목가치 검증 (이미 위에서 조정했지만 재확인)
+            final_notional = quantity * price
+            min_notional = 5.0  # 바이낸스 퓨처스 최소 명목가치 $5
+            if final_notional < min_notional:
+                error_msg = f"⚠️ 최종 명목가치 미달 - 계산값: ${final_notional:.2f}, 최소값: ${min_notional:.2f}"
+                print(error_msg)
+                # 이 경우는 시스템 오류이므로 거래를 중단
+                self.logger.error(f"시스템 오류: 최소 명목가치 조정 후에도 ${final_notional:.2f} < ${min_notional:.2f}")
+                return False
+            
+            # 레버리지 설정 (강화된 검증)
             try:
+                # 1단계: 레버리지 설정
                 self.private_exchange.set_leverage(leverage, symbol)
-                print(f"✅ 레버리지 {leverage}배 설정 완료: \033[92m{clean_symbol}\033[0m 💚")
+                print(f"🔧 레버리지 {leverage}배 설정 요청: \033[92m{clean_symbol}\033[0m 💚")
+                
+                # 2단계: 설정 검증 (429 에러 방지를 위해 간소화)
+                try:
+                    # 🚀 API 호출 최소화: 거래 후 검증으로 변경 (사전 검증 생략)
+                    print(f"✅ 레버리지 {leverage}배 설정 요청 완료: {clean_symbol}")
+                    print("   📋 거래 후 검증 예정 (API 호출 최소화)")
+                        
+                except Exception as verify_e:
+                    print(f"⚠️ 레버리지 설정 후 처리 실패: {verify_e}")
+                    print("   📋 거래 계속 진행")
+                    
             except Exception as e:
-                print(f"⚠️ 레버리지 설정 실패: {e}")
+                print(f"❌ 레버리지 설정 실패: {e}")
+                print(f"   📋 {symbol} 거래 중단 - 레버리지 설정 필수")
+                return False
             
             # 시장가 매수 주문
             order = self.private_exchange.create_market_buy_order(
@@ -3036,15 +3117,32 @@ class FifteenMinuteMegaStrategy:
                         }
                     )
 
+                # 🔍 거래 후 레버리지 검증 (API 호출 최소화)
+                try:
+                    # 주문 완료 후 실제 포지션에서 레버리지 확인 (추가 API 호출 없이)
+                    if order.get('info') and 'leverage' in str(order.get('info', {})):
+                        actual_leverage = order.get('info', {}).get('leverage', leverage)
+                        if actual_leverage and float(actual_leverage) != leverage:
+                            print(f"   ⚠️ 레버리지 불일치 발견: 요청 {leverage}배, 실제 {actual_leverage}배")
+                        else:
+                            print(f"   ✅ 레버리지 {leverage}배 확인됨")
+                    else:
+                        print(f"   ℹ️ 레버리지 검증 정보 없음 (정상 진행)")
+                except Exception as e:
+                    print(f"   ⚠️ 레버리지 검증 처리 오류: {e}")
+
                 # DCA 매니저에 포지션 등록 (자동으로 1차, 2차 DCA 주문 생성)
                 if self.dca_manager:
+                    # 전략 정보도 함께 저장
                     dca_success = self.dca_manager.add_position(
                         symbol=symbol,
                         entry_price=filled_price,
                         quantity=filled_qty,
                         notional=notional,
                         leverage=leverage,
-                        total_balance=free_usdt
+                        total_balance=free_usdt,
+                        strategy=strategy_type,  # 전략 정보 추가
+                        signal_data=signal_data  # 원본 신호 데이터 추가
                     )
                     if dca_success:
                         print(f"   ✅ DCA 시스템 등록 완료 - 자동 1차/2차 주문 생성됨")
@@ -3108,7 +3206,7 @@ class FifteenMinuteMegaStrategy:
 ━━━━━━━━━━━━━━━━━━━━━━
 🎯 전략: {strategy_type}
 💰 진입가격: ${price:.4f}
-💵 투입금액: ${(free_usdt * 0.015):.0f} USDT (1.5%)
+💵 투입금액: ${position_value:.0f} USDT (1.5%)
 ⚠️ 실패사유: 시스템 오류
 📋 오류정보: {str(e)[:100]}
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -3267,6 +3365,10 @@ class FifteenMinuteMegaStrategy:
                 clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
 
                 try:
+                    # 🚀 API 호출 조절: 5초 대기 + 429 에러 방지
+                    print(f"   📡 {clean_symbol} API 호출 대기 중... (5초)")
+                    time.sleep(5.0)  # DCA 검증 간 충분한 대기
+                    
                     # 거래소에서 실제 포지션 정보 조회
                     exchange_positions = self.private_exchange.fetch_positions([symbol])
                     current_position = None
@@ -3318,17 +3420,19 @@ class FifteenMinuteMegaStrategy:
                         elif order_side == 'sell' and 'stop' in order_type.lower():
                             stop_orders.append(order)
 
-                    # 검증 결과 출력
-                    print(f"   • 1차 DCA: {len(dca1_orders)}개, 2차 DCA: {len(dca2_orders)}개, 손절: {len(stop_orders)}개")
+                    # 🔥 불타기 전용 시스템 - DCA 비활성화
+                    # DCA는 더 이상 사용하지 않으므로 정보성으로만 표시
+                    print(f"   • 1차 DCA: {len(dca1_orders)}개, 2차 DCA: {len(dca2_orders)}개, 손절: {len(stop_orders)}개 (DCA시스템: 비활성화)")
 
-                    # 누락된 주문 확인 및 재생성
+                    # 🔥 DCA 시스템 간소화: 1차/2차 DCA 주문 체크 비활성화
+                    # 불타기 시스템만 사용하므로 DCA 주문 누락 알림 제거
                     if len(dca1_orders) == 0:
-                        print(f"   ⚠️ {clean_symbol}: 1차 DCA 주문 누락 - 재생성 필요")
-                        # DCA 매니저를 통해 재생성 시도
-                        # 여기서는 로그만 출력 (실제 재생성은 DCA 매니저가 자동으로 처리)
-
+                        # print(f"   ⚠️ {clean_symbol}: 1차 DCA 주문 누락 - 재생성 필요")  # 비활성화
+                        pass  # DCA 시스템 비활성화됨
+                        
                     if len(dca2_orders) == 0:
-                        print(f"   ⚠️ {clean_symbol}: 2차 DCA 주문 누락 - 재생성 필요")
+                        # print(f"   ⚠️ {clean_symbol}: 2차 DCA 주문 누락 - 재생성 필요")  # 비활성화
+                        pass  # DCA 시스템 비활성화됨
 
                     # 중복된 주문 확인
                     if len(dca1_orders) > 1:
@@ -3350,13 +3454,14 @@ class FifteenMinuteMegaStrategy:
                             except Exception as e:
                                 print(f"      ⚠️ 주문 취소 실패: {e}")
 
-                    # 순환매 상태 확인
+                    # 불타기 전용 순환매 상태 확인
                     if position.cyclic_state != 'NORMAL_DCA':
-                        print(f"   🔄 {clean_symbol}: 순환매 상태 - {position.cyclic_state} (사이클: {position.cyclic_count}/3)")
+                        print(f"   🔄 {clean_symbol}: 불타기 전용 순환매 상태 - {position.cyclic_state} (사이클: {position.cyclic_count}/3)")
 
-                        # 부분 청산 후 재진입 확인
+                        # 부분 청산 후 재진입 확인 (DCA 시스템 비활성화로 주석처리)
                         if position.cyclic_count > 0 and len(dca1_orders) == 0 and len(dca2_orders) == 0:
-                            print(f"   ⚠️ {clean_symbol}: 순환매 후 DCA 주문 누락 - 재생성 필요")
+                            # print(f"   ⚠️ {clean_symbol}: 순환매 후 DCA 주문 누락 - 재생성 필요")  # 비활성화
+                            pass  # 불타기 시스템만 사용하므로 DCA 주문 체크 불필요
 
                 except Exception as e:
                     print(f"   ❌ {clean_symbol} 검증 실패: {e}")
@@ -3445,9 +3550,54 @@ class FifteenMinuteMegaStrategy:
                         # 활성 포지션 확인 및 검증
                         active_count = len([p for p in self.dca_manager.positions.values() if p.is_active])
                         print(f"   ✅ DCA 동기화 완료 - 활성 포지션: {active_count}개")
+                        
+                        # 🎨 콘솔에 활성포지션 예쁘게 출력
+                        if active_count > 0:
+                            self.dca_manager.display_console_positions()
 
                         # DCA 주문 상태 검증 (누락/중복 확인 및 조정)
                         self._verify_dca_orders()
+
+                        # 🔥 실시간 불타기 기회 체크 (핵심 추가)
+                        if active_count > 0:
+                            print(f"\n📈 실시간 불타기 기회 체크...")
+                            for symbol, position in self.dca_manager.positions.items():
+                                if position.is_active:
+                                    try:
+                                        # 현재가 조회
+                                        ticker = self.private_exchange.fetch_ticker(symbol)
+                                        current_price = ticker['last']
+                                        
+                                        # 불타기 기회 체크
+                                        pyramid_signal = self.dca_manager.check_pyramid_opportunity(position, current_price)
+                                        if pyramid_signal and pyramid_signal.get('signal', False):
+                                            clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
+                                            print(f"🔥 {clean_symbol} 불타기 기회 감지!")
+                                            print(f"   📊 현재가: ${current_price:.6f}")
+                                            print(f"   📈 수익률: {pyramid_signal.get('current_profit_pct', 0):.2f}%")
+                                            print(f"   🎯 단계: {pyramid_signal.get('stage', 'UNKNOWN')}")
+                                            
+                                            # 실제 불타기 진입 실행
+                                            pyramid_success = self.dca_manager.execute_pyramid_entry(
+                                                symbol, pyramid_signal
+                                            )
+                                            
+                                            if pyramid_success:
+                                                print(f"   ✅ 불타기 진입 성공!")
+                                                # 텔레그램 알림
+                                                message = f"""🔥 불타기 추가진입 완료 🔥
+━━━━━━━━━━━━━━━━━━━━━━
+📈 심볼: <b>{clean_symbol}</b>
+💰 추가진입가: ${current_price:,.6f}
+📊 단계: {pyramid_signal.get('stage', 'UNKNOWN')}
+📈 수익률: +{pyramid_signal.get('current_profit_pct', 0):.2f}%
+🔥 불타기 진입: {position.pyramid_count}/3
+🕒 시간: {get_korea_time().strftime('%H:%M:%S')}"""
+                                                self._send_notification_once(symbol, "pyramid_entry", message)
+                                            else:
+                                                print(f"   ❌ 불타기 진입 실패")
+                                    except Exception as e:
+                                        print(f"   ⚠️ {symbol} 불타기 체크 실패: {e}")
 
                         # 출구 전략 체크 (SuperTrend, BB600, 누적수익보호 등)
                         if active_count > 0:
@@ -3465,17 +3615,25 @@ class FifteenMinuteMegaStrategy:
                                 # 출구 전략 체크 (DCA 매니저가 자동으로 처리)
                                 # sync_with_exchange()에서 이미 처리되므로 별도 호출 불필요
 
-                                # 순환매 통계 출력
+                                # 순환매 통계 출력 (안전한 접근)
                                 cyclic_stats = self.dca_manager.get_cyclic_statistics()
-                                if cyclic_stats['total_positions'] > 0:
-                                    print(f"\n   🔄 순환매 통계:")
-                                    print(f"      • 전체 포지션: {cyclic_stats['total_positions']}개")
-                                    print(f"      • 순환매 활성: {cyclic_stats['cyclic_active']}개")
-                                    print(f"      • 평균 사이클: {cyclic_stats['avg_cyclic_count']:.2f}회")
-                                    print(f"      • 총 순환매 수익: ${cyclic_stats['total_cyclic_profit']:.0f}")
+                                if isinstance(cyclic_stats, dict) and not cyclic_stats.get('error'):
+                                    total_cyclic = cyclic_stats.get('total_cyclic_positions', 0)
+                                    if total_cyclic > 0:
+                                        print(f"\n   🔄 순환매 통계:")
+                                        print(f"      • 순환매 포지션: {total_cyclic}개")
+                                        
+                                        # 안전하게 중첩 딕셔너리 접근
+                                        cyclic_states = cyclic_stats.get('cyclic_states', {})
+                                        active_count = cyclic_states.get('active', 0)
+                                        complete_count = cyclic_states.get('complete', 0)
+                                        
+                                        print(f"      • 순환매 활성: {active_count}개")
+                                        print(f"      • 순환매 완료: {complete_count}개")
+                                        print(f"      • 총 순환매 수익: ${cyclic_stats.get('total_cyclic_profit', 0):.0f}")
 
                             except Exception as e:
-                                print(f"   ⚠️ 출구 전략 체크 실패: {e}")
+                                print(f"   ⚠️ 순환매 통계 확인 실패: {e}")
 
                     except Exception as e:
                         print(f"   ⚠️ DCA 동기화 실패: {e}")
@@ -3608,6 +3766,12 @@ def main():
             
             # 최종 포지션 상태 체크
             strategy.check_real_position_status()
+            
+            # 🎨 콘솔에 활성포지션 예쁘게 출력
+            if strategy.dca_manager:
+                active_count = len([p for p in strategy.dca_manager.positions.values() if p.is_active])
+                if active_count > 0:
+                    strategy.dca_manager.display_console_positions()
             
             # 최종 포트폴리오 현황 출력
             final_portfolio = strategy.get_portfolio_summary()

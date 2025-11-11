@@ -146,7 +146,13 @@ class TelegramBot:
 📱 <b>상태:</b> 포지션 진입 완료
         """
         
-        return self.send_message(message.strip())
+        return self.send_message(message.strip(), event_type="entry", symbol=symbol, metadata={
+            'entry_price': entry_price,
+            'position_amount': position_amount,
+            'leverage': leverage,
+            'total_value': total_value,
+            'conditions': conditions
+        })
     
     def send_account_status(self, total_balance: float, used_balance: float, 
                           free_balance: float, positions: List[Dict], 
@@ -206,7 +212,14 @@ class TelegramBot:
 🤖 <b>전략:</b> ULTRA_SURGE_1M_STRATEGY
         """
         
-        return self.send_message(message.strip())
+        return self.send_message(message.strip(), event_type="account_status", metadata={
+            'total_balance': total_balance,
+            'used_balance': used_balance,
+            'free_balance': free_balance,
+            'positions': positions,
+            'total_pnl': total_pnl,
+            'scan_count': scan_count
+        })
     
     def send_scan_summary(self, scan_results: Dict) -> bool:
         """
@@ -255,7 +268,12 @@ class TelegramBot:
 🤖 <b>전략:</b> ULTRA_SURGE_1M_STRATEGY
         """
         
-        return self.send_message(message.strip())
+        return self.send_message(message.strip(), event_type="scan_summary", metadata={
+            'primary_count': primary_count,
+            'strong_count': strong_count,
+            'partial_count': partial_count,
+            'strong_symbols': strong_symbols
+        })
     
     def send_error_alert(self, error_message: str, context: str = "") -> bool:
         """
@@ -281,7 +299,10 @@ class TelegramBot:
 🤖 <b>전략:</b> ULTRA_SURGE_1M_STRATEGY
         """
         
-        return self.send_message(message.strip())
+        return self.send_message(message.strip(), event_type="error", metadata={
+            'error_message': error_message,
+            'context': context
+        })
     
     def test_connection(self) -> bool:
         """
@@ -298,7 +319,7 @@ class TelegramBot:
 ⏰ 테스트 시간: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
         """
         
-        return self.send_message(test_message.strip())
+        return self.send_message(test_message.strip(), event_type="test", metadata={'test': True})
 
 # 텔레그램 봇 설정 방법 안내
 TELEGRAM_SETUP_GUIDE = """

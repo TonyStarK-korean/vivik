@@ -34,7 +34,7 @@ try:
     from realtime_websocket_stream import RealtimeWebSocketStream
     HAS_WEBSOCKET_STREAM = True
 except ImportError:
-    print("⚠️ realtime_websocket_stream.py 없음 - 기본 모드로 실행")
+    print("[INFO] realtime_websocket_stream.py not found - running in basic mode")
     HAS_WEBSOCKET_STREAM = False
 
 app = Flask(__name__)
@@ -48,7 +48,7 @@ api_key = os.getenv('BINANCE_API_KEY')
 api_secret = os.getenv('BINANCE_SECRET_KEY')
 
 if not api_key or not api_secret:
-    print("⚠️ WARNING: BINANCE_API_KEY or BINANCE_SECRET_KEY not found in .env")
+    print("[WARNING] BINANCE_API_KEY or BINANCE_SECRET_KEY not found in .env")
     print("API will run in DEMO mode with sample data")
     DEMO_MODE = True
 else:
@@ -56,9 +56,9 @@ else:
         client = Client(api_key, api_secret)
         client.futures_account()
         DEMO_MODE = False
-        print("✅ Binance Futures API connected successfully")
+        print("[OK] Binance Futures API connected successfully")
     except Exception as e:
-        print(f"⚠️ Binance API connection failed: {e}")
+        print(f"[WARNING] Binance API connection failed: {e}")
         print("API will run in DEMO mode with sample data")
         DEMO_MODE = True
 
@@ -177,7 +177,7 @@ def get_account_balance():
         new_hash = calculate_hash(result)
         if new_hash != data_hashes['account']:
             data_hashes['account'] = new_hash
-            print(f"🔄 계좌 데이터 변경 감지")
+            print(f"[UPDATE] Account data change detected")
         
         return result
         
@@ -288,7 +288,7 @@ def get_open_positions():
         new_hash = calculate_hash(open_positions)
         if new_hash != data_hashes['positions']:
             data_hashes['positions'] = new_hash
-            print(f"🔄 포지션 데이터 변경 감지: {len(open_positions)}개")
+            print(f"[UPDATE] Position data change detected: {len(open_positions)} positions")
 
         return open_positions
         
@@ -297,7 +297,7 @@ def get_open_positions():
         return cache.get('positions', [])
 
 def get_recent_signals():
-    """최근 신호 로그 읽기 (캐시 적용)"""
+    """최근 신호 로그 읽기 (우선순위 기반 중복 제거 및 용어 정리)"""
     signals = []
 
     if os.path.exists(LOG_FILE):
@@ -309,17 +309,83 @@ def get_recent_signals():
             
             # 파일이 변경되었으면 다시 로드
             with open(LOG_FILE, 'r', encoding='utf-8') as f:
-                lines = f.readlines()[-50:]
+                lines = f.readlines()[-100:]  # 더 많은 라인 읽어서 중복 제거 처리
+                raw_signals = []
                 for line in lines:
                     try:
                         signal = json.loads(line.strip())
-                        signals.append(signal)
+                        raw_signals.append(signal)
                     except:
                         continue
             
+            # 중복 제거 처리: 우선순위 기반 (alpha_z_strategy > dca_manager)
+            deduplicated_signals = {}
+            source_priority = {
+                'alpha_z_strategy': 1,
+                'dca_manager': 2,
+                'unknown': 3
+            }
+            
+            for signal in raw_signals:
+                # 중복 식별 키: timestamp + symbol + action
+                timestamp = signal.get('timestamp', '')
+                symbol = signal.get('symbol', '')
+                action = signal.get('action', '')
+                
+                # 타임스탬프를 초 단위로 truncate (밀리초 차이 무시)
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    truncated_ts = dt.replace(microsecond=0).isoformat()
+                except:
+                    truncated_ts = timestamp[:19] if len(timestamp) >= 19 else timestamp
+                
+                key = f"{truncated_ts}_{symbol}_{action}"
+                
+                # 신호 소스 확인
+                metadata = signal.get('metadata', {})
+                source = metadata.get('source', 'unknown')
+                current_priority = source_priority.get(source, 3)
+                
+                # 중복 체크 및 우선순위 비교
+                if key in deduplicated_signals:
+                    existing_source = deduplicated_signals[key].get('metadata', {}).get('source', 'unknown')
+                    existing_priority = source_priority.get(existing_source, 3)
+                    
+                    # 현재 신호의 우선순위가 더 높은 경우에만 대체
+                    if current_priority < existing_priority:
+                        deduplicated_signals[key] = signal
+                else:
+                    deduplicated_signals[key] = signal
+            
+            # 중복 제거된 신호들을 시간순 정렬하여 반환
+            signals = list(deduplicated_signals.values())
+            signals.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+            
+            # 용어 정리: DCA → 불타기 (pyramid trading)
+            for signal in signals:
+                metadata = signal.get('metadata', {})
+                strategy = signal.get('strategy', '')
+                original_strategy = metadata.get('original_strategy', strategy)
+                
+                # DCA 관련 용어를 불타기로 변경
+                if 'DCA' in original_strategy or 'dca' in original_strategy:
+                    original_strategy = original_strategy.replace('DCA', '불타기').replace('dca', '불타기')
+                    metadata['original_strategy'] = original_strategy
+                    signal['strategy'] = original_strategy
+                
+                # 상태 메시지도 정리
+                status = signal.get('status', '')
+                if 'DCA' in status or 'dca' in status:
+                    status = status.replace('DCA', '불타기').replace('dca', '불타기')
+                    signal['status'] = status
+            
+            # 최신 50개만 유지
+            signals = signals[:50]
+            
             data_hashes['signals_file_time'] = file_mtime
             cache['recent_signals'] = signals
-            print(f"📡 신호 로그 업데이트 감지")
+            print(f"[SIGNALS] Log updated: {len(signals)} signals (duplicates removed)")
             
         except Exception as e:
             print(f"Error reading signal log: {e}")
@@ -346,6 +412,91 @@ def get_recent_signals():
 
     return signals
 
+def get_recent_signals_fresh():
+    """최근 신호 로그 읽기 (캐시 없이 항상 새로 로드하여 중복 제거)"""
+    signals = []
+    
+    if os.path.exists(LOG_FILE):
+        try:
+            with open(LOG_FILE, 'r', encoding='utf-8') as f:
+                lines = f.readlines()[-100:]
+                raw_signals = []
+                for line in lines:
+                    try:
+                        signal = json.loads(line.strip())
+                        raw_signals.append(signal)
+                    except:
+                        continue
+            
+            # 중복 제거 처리: 우선순위 기반 (alpha_z_strategy > dca_manager)
+            deduplicated_signals = {}
+            source_priority = {
+                'alpha_z_strategy': 1,
+                'dca_manager': 2,
+                'unknown': 3
+            }
+            
+            for signal in raw_signals:
+                timestamp = signal.get('timestamp', '')
+                symbol = signal.get('symbol', '')
+                action = signal.get('action', '')
+                
+                # 타임스탬프를 초 단위로 truncate (밀리초 차이 무시)
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    truncated_ts = dt.replace(microsecond=0).isoformat()
+                except:
+                    truncated_ts = timestamp[:19] if len(timestamp) >= 19 else timestamp
+                
+                key = f"{truncated_ts}_{symbol}_{action}"
+                
+                # 신호 소스 확인
+                metadata = signal.get('metadata', {})
+                source = metadata.get('source', 'unknown')
+                current_priority = source_priority.get(source, 3)
+                
+                # 중복 체크 및 우선순위 비교
+                if key in deduplicated_signals:
+                    existing_source = deduplicated_signals[key].get('metadata', {}).get('source', 'unknown')
+                    existing_priority = source_priority.get(existing_source, 3)
+                    
+                    # 현재 신호의 우선순위가 더 높은 경우에만 대체
+                    if current_priority < existing_priority:
+                        deduplicated_signals[key] = signal
+                else:
+                    deduplicated_signals[key] = signal
+            
+            # 중복 제거된 신호들을 시간순 정렬하여 반환
+            signals = list(deduplicated_signals.values())
+            signals.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+            
+            # 용어 정리: DCA → 불타기 (pyramid trading)
+            for signal in signals:
+                metadata = signal.get('metadata', {})
+                strategy = signal.get('strategy', '')
+                original_strategy = metadata.get('original_strategy', strategy)
+                
+                # DCA 관련 용어를 불타기로 변경
+                if 'DCA' in original_strategy or 'dca' in original_strategy:
+                    original_strategy = original_strategy.replace('DCA', '불타기').replace('dca', '불타기')
+                    metadata['original_strategy'] = original_strategy
+                    signal['strategy'] = original_strategy
+                
+                # 상태 메시지도 정리
+                status = signal.get('status', '')
+                if 'DCA' in status or 'dca' in status:
+                    status = status.replace('DCA', '불타기').replace('dca', '불타기')
+                    signal['status'] = status
+            
+            # 최신 50개만 유지
+            signals = signals[:50]
+            
+        except Exception as e:
+            print(f"Error reading signal log: {e}")
+    
+    return signals
+
 def calculate_strategy_stats():
     """전략별 통계 실시간 계산"""
     # 기존 로직 유지 - 파일 변경 감지 추가
@@ -355,7 +506,7 @@ def calculate_strategy_stats():
             return cache.get('strategy_stats', {})
         
         data_hashes['stats_file_time'] = file_mtime
-        print(f"📊 거래 이력 업데이트 감지")
+        print(f"[STATS] Trade history update detected")
 
     # 기본 통계 (데모용)
     return {
@@ -393,7 +544,7 @@ def update_cache():
                 cache['recent_signals'] = get_recent_signals()
                 cache['strategy_stats'] = calculate_strategy_stats()
                 
-                print(f"⚡ 경량 캐시 업데이트 (WebSocket 활성) - {get_korea_time().strftime('%H:%M:%S')}")
+                print(f"[WEBSOCKET] Lightweight cache update - {get_korea_time().strftime('%H:%M:%S')}")
             else:
                 # WebSocket이 없으면 기존 방식
                 cache['account_info'] = get_account_balance()
@@ -402,12 +553,12 @@ def update_cache():
                 cache['recent_signals'] = get_recent_signals()
                 cache['strategy_stats'] = calculate_strategy_stats()
                 
-                print(f"🔄 전체 캐시 업데이트 (API 호출) - {get_korea_time().strftime('%H:%M:%S')}")
+                print(f"[CACHE] Full cache update (API calls) - {get_korea_time().strftime('%H:%M:%S')}")
             
             cache['last_update'] = get_korea_time().strftime('%Y-%m-%d %H:%M:%S')
             
         except Exception as e:
-            print(f"❌ Cache update error: {e}")
+            print(f"[ERROR] Cache update error: {e}")
 
         time.sleep(3)  # 3초마다 업데이트
 
@@ -426,7 +577,8 @@ def api_positions():
 
 @app.route('/api/signals')
 def api_signals():
-    return jsonify(cache['recent_signals'])
+    # Force fresh deduplication on every request for now
+    return jsonify(get_recent_signals_fresh())
 
 @app.route('/api/strategy-stats')
 def api_strategy_stats():
@@ -483,9 +635,9 @@ if __name__ == '__main__':
         websocket_stream = RealtimeWebSocketStream(update_callback=websocket_data_callback)
         
         if websocket_stream.start():
-            print("🚀 WebSocket 스트림 시작 성공")
+            print("[OK] WebSocket stream started successfully")
         else:
-            print("⚠️ WebSocket 스트림 시작 실패 - 기본 모드로 진행")
+            print("[WARNING] WebSocket stream failed to start - using basic mode")
             websocket_stream = None
     
     # 백그라운드 캐시 업데이트 시작
@@ -493,7 +645,7 @@ if __name__ == '__main__':
     cache_thread.start()
 
     print("\n" + "="*60)
-    print("🚀 Enhanced Alpha-Z Trading Dashboard API Server")
+    print("Enhanced Alpha-Z Trading Dashboard API Server")
     print("="*60)
     print(f"Mode: {'DEMO' if DEMO_MODE else 'LIVE'}")
     print(f"WebSocket: {'ENABLED' if HAS_WEBSOCKET_STREAM and websocket_stream else 'DISABLED'}")

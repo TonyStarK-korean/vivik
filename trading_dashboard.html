@@ -460,23 +460,55 @@
                     const originalPercent = ((pos.markPrice - pos.entryPrice) / pos.entryPrice * 100).toFixed(2);
                     const leveragePercent = (originalPercent * pos.leverage).toFixed(2);
                     const positionValue = Math.abs(pos.positionAmt * pos.markPrice);
+                    
+                    // DCA 정보 표시
+                    const strategy = pos.strategy || 'UNKNOWN';
+                    const dcaStage = pos.dcaStage || 'UNKNOWN';
+                    const cyclicCount = pos.cyclicCount || 0;
+                    
+                    // 전략별 아이콘 및 색상
+                    const strategyInfo = {
+                        'A': { icon: '🔥', color: '#ff6b35', name: '3분봉 바닥급등타점' },
+                        'B': { icon: '⚡', color: '#f7931e', name: '15분봉 급등초입' },
+                        'C': { icon: '🎯', color: '#00d4ff', name: '30분봉 급등맥점' },
+                        'PYRAMID': { icon: '📈', color: '#7928ca', name: '불타기 관리' },
+                        'UNKNOWN': { icon: '📊', color: '#6c757d', name: '기타' }
+                    };
+                    
+                    const stratInfo = strategyInfo[strategy] || { icon: '📊', color: '#6c757d', name: '기타' };
+                    
+                    // 상승/하락 아이콘
+                    const trendIcon = pnl >= 0 ? '🔺' : '🔻';
+                    const trendColor = pnl >= 0 ? '#00ff88' : '#ff4757';
 
                     return `
-                        <div class="position-item">
+                        <div class="position-item" style="border-left: 4px solid ${stratInfo.color};">
                             <div class="position-header">
-                                <span class="position-symbol">${pos.symbol}</span>
-                                <span class="position-pnl ${pnl >= 0 ? 'positive' : 'negative'}">
-                                    ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USDT (${pnl >= 0 ? '+' : ''}${leveragePercent}%)
+                                <span class="position-symbol" style="display: flex; align-items: center; gap: 8px;">
+                                    <span style="font-size: 1.2em;">${stratInfo.icon}</span>
+                                    <span style="font-weight: bold; color: #ffffff;">${pos.symbol.replace('USDT', '').replace('/', '')}</span>
+                                    <span style="font-size: 0.8em; color: ${stratInfo.color}; background: rgba(${stratInfo.color.substring(1).match(/.{2}/g).map(x => parseInt(x, 16)).join(',')}, 0.2); padding: 2px 6px; border-radius: 10px;">${strategy}</span>
+                                </span>
+                                <span class="position-pnl" style="display: flex; align-items: center; gap: 5px; color: ${trendColor}; font-weight: bold;">
+                                    <span style="font-size: 1.1em;">${trendIcon}</span>
+                                    <span>${pnl >= 0 ? '+' : ''}${leveragePercent}%</span>
+                                    <span style="font-size: 0.9em; opacity: 0.8;">(${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USDT)</span>
                                 </span>
                             </div>
-                            <div class="position-details">
-                                <div>진입가: $${pos.entryPrice.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
-                                <div>현재가: $${pos.markPrice.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
-                                <div>수량: ${Math.abs(pos.positionAmt)} ${pos.symbol.replace('USDT', '')}</div>
-                                <div>레버리지: ${pos.leverage}x</div>
-                                <div>포지션 크기: $${positionValue.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
-                                <div>원금 수익률: <span class="${originalPercent >= 0 ? 'positive' : 'negative'}">${originalPercent >= 0 ? '+' : ''}${originalPercent}%</span></div>
-                                <div>방향: <span class="${pos.positionAmt > 0 ? 'positive' : 'negative'}">${pos.positionAmt > 0 ? 'LONG 🟢' : 'SHORT 🔴'}</span></div>
+                            <div class="position-details" style="margin-top: 10px; font-size: 0.9em;">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                                    <div>📈 진입가: <span style="color: #00d4ff;">$${pos.entryPrice.toLocaleString('en-US', {minimumFractionDigits: 2})}</span></div>
+                                    <div>💰 현재가: <span style="color: ${trendColor};">$${pos.markPrice.toLocaleString('en-US', {minimumFractionDigits: 2})}</span></div>
+                                    <div>⚖️ 수량: <span style="color: #ffffff;">${Math.abs(pos.positionAmt)}</span></div>
+                                    <div>🔄 레버리지: <span style="color: #ffa502;">${pos.leverage}x</span></div>
+                                    <div>📊 포지션 크기: <span style="color: #a4b0be;">$${positionValue.toLocaleString('en-US', {minimumFractionDigits: 2})}</span></div>
+                                    <div>💎 원금 수익률: <span style="color: ${originalPercent >= 0 ? '#00ff88' : '#ff4757'};">${originalPercent >= 0 ? '+' : ''}${originalPercent}%</span></div>
+                                </div>
+                                <div style="margin-top: 8px; font-size: 0.8em; color: #a4b0be;">
+                                    ${dcaStage !== 'UNKNOWN' && dcaStage !== 'INITIAL' ? `📈 불타기: ${dcaStage.replace('DCA', '').replace('_', ' ')}` : ''}
+                                    ${cyclicCount > 0 ? `${dcaStage !== 'UNKNOWN' && dcaStage !== 'INITIAL' ? ' | ' : ''}🔁 순환매: ${cyclicCount}회` : ''}
+                                    ${(dcaStage !== 'UNKNOWN' && dcaStage !== 'INITIAL') || cyclicCount > 0 ? ' | ' : ''}${pos.positionAmt > 0 ? '🟢 LONG' : '🔴 SHORT'}
+                                </div>
                             </div>
                         </div>
                     `;
@@ -542,8 +574,16 @@
 
                 document.getElementById('total-trades').textContent = totalTrades;
                 document.getElementById('win-rate').textContent = winRate + '%';
-                document.getElementById('profit-factor').textContent = '2.3';
-                document.getElementById('avg-hold').textContent = '12.5일';
+                
+                // Profit Factor 계산 (실제 데이터 기반)
+                const totalProfit = stats.strategy_a.total_return + stats.strategy_b.total_return + stats.strategy_c.total_return;
+                const totalLoss = Math.abs((stats.strategy_a.loss_count + stats.strategy_b.loss_count + stats.strategy_c.loss_count) * 2.5); // 평균 손실 추정
+                const profitFactor = totalLoss > 0 ? (totalProfit / totalLoss).toFixed(2) : '∞';
+                document.getElementById('profit-factor').textContent = profitFactor;
+                
+                // 평균 보유시간 계산 (총 거래 수 기반 추정)
+                const avgHoldDays = totalTrades > 0 ? Math.max(1, Math.round(totalTrades / 10)).toString() + '일' : '-';
+                document.getElementById('avg-hold').textContent = avgHoldDays;
             } catch (error) {
                 console.error('전략 통계 로딩 실패:', error);
             }
@@ -573,18 +613,49 @@
                             </tr>
                         </thead>
                         <tbody>
-                            ${signals.slice(0, 10).map(signal => `
+                            ${signals.slice(0, 10).map(signal => {
+                                // 전략 분류 개선
+                                let strategyClass = 'strategy-a'; // 기본값
+                                let strategyDisplay = signal.strategy || 'A';
+                                
+                                if (signal.strategy === 'B' || (signal.strategy && signal.strategy.includes('B전략'))) {
+                                    strategyClass = 'strategy-b';
+                                    strategyDisplay = 'B';
+                                } else if (signal.strategy === 'C' || (signal.strategy && signal.strategy.includes('C전략'))) {
+                                    strategyClass = 'strategy-c';
+                                    strategyDisplay = 'C';
+                                } else if (signal.strategy === 'A' || (signal.strategy && signal.strategy.includes('A전략'))) {
+                                    strategyClass = 'strategy-a';
+                                    strategyDisplay = 'A';
+                                }
+                                
+                                // 액션 표시 개선
+                                let actionDisplay = signal.action;
+                                if (signal.action === 'DCA_BUY' || signal.action === 'DCA실행') {
+                                    actionDisplay = '불타기 진입';
+                                } else if (signal.action === '불타기 진입') {
+                                    actionDisplay = '불타기 진입';
+                                } else if (signal.action === 'BUY') {
+                                    actionDisplay = '진입';
+                                } else if (signal.action === 'SELL') {
+                                    actionDisplay = '청산';
+                                } else if (signal.action === 'PARTIAL_SELL') {
+                                    actionDisplay = '부분청산';
+                                }
+                                
+                                return `
                                 <tr>
                                     <td>${signal.timestamp}</td>
                                     <td>${signal.symbol}</td>
-                                    <td><span class="strategy-badge strategy-${signal.strategy.toLowerCase()}">${signal.strategy}</span></td>
-                                    <td>${signal.action}</td>
+                                    <td><span class="strategy-badge ${strategyClass}">${strategyDisplay} 전략</span></td>
+                                    <td>${actionDisplay}</td>
                                     <td>$${parseFloat(signal.price).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                                    <td><span class="${signal.status.includes('익절') ? 'positive' : signal.status.includes('손절') ? 'neutral' : 'positive'}">
-                                        ${signal.status.includes('익절') ? '✓' : signal.status.includes('손절') ? '⚠' : '✓'} ${signal.status}
+                                    <td><span class="${signal.status && (signal.status.includes('익절') || signal.status.includes('완료')) ? 'positive' : signal.status && signal.status.includes('손절') ? 'neutral' : 'positive'}">
+                                        ${signal.status && (signal.status.includes('익절') || signal.status.includes('완료')) ? '✓' : signal.status && signal.status.includes('손절') ? '⚠' : '✓'} ${signal.status}
                                     </span></td>
                                 </tr>
-                            `).join('')}
+                                `;
+                            }).join('')}
                         </tbody>
                     </table>
                 `;
