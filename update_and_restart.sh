@@ -1,155 +1,70 @@
 #!/bin/bash
-# VPS Trading Bot Automatic Update and Restart Script
-# Usage: ./update_and_restart.sh
+# 자동 업데이트 및 재시작 스크립트
 
-echo "========================================="
-echo "📦 VPS Trading Bot Update Script"
-echo "========================================="
+set -e
+
+echo "========================================"
+echo "🔄 자동 업데이트 및 재시작"
+echo "========================================"
 echo ""
 
-# 프로젝트 경로 설정 (필요시 수정)
-PROJECT_DIR=~/vivik
-cd $PROJECT_DIR || { echo "❌ Project directory not found: $PROJECT_DIR"; exit 1; }
+# 1. 프로젝트 디렉토리 확인
+cd /root/vivik || { echo "❌ 디렉토리 없음: /root/vivik"; exit 1; }
 
-echo "📁 Project directory: $PROJECT_DIR"
+# 2. 현재 브랜치 및 커밋 확인
+echo "📌 현재 상태:"
+git branch
+git log -1 --oneline
 echo ""
 
-# 백업 생성
-BACKUP_DIR=~/vivik_backup_$(date +%Y%m%d_%H%M%S)
-echo "💾 Creating backup: $BACKUP_DIR"
-cp -r . $BACKUP_DIR
-echo "✅ Backup created successfully"
-echo ""
-
-# 봇 중지
-echo "🛑 Stopping trading bot..."
-BOT_STOPPED=false
-
-# systemd 서비스 확인 및 중지
-if systemctl is-active --quiet trading-bot 2>/dev/null; then
-    sudo systemctl stop trading-bot
-    echo "✅ Trading bot stopped (systemd)"
-    BOT_STOPPED=true
-else
-    echo "ℹ️  Trading bot is not running via systemd"
-fi
-
-# 프로세스 직접 종료 (이중 확인)
-if pgrep -f one_minute_surge_entry_strategy.py > /dev/null; then
-    echo "🔍 Found running bot process, killing..."
-    pkill -f one_minute_surge_entry_strategy.py
-    sleep 2
-    BOT_STOPPED=true
-    echo "✅ Bot process killed"
-fi
-
-if [ "$BOT_STOPPED" = false ]; then
-    echo "ℹ️  No running bot detected"
-fi
-echo ""
-
-# Git 업데이트
-echo "📥 Pulling latest changes from GitHub..."
-git fetch origin
-
-# 충돌 체크
-if git diff --quiet HEAD origin/main; then
-    echo "ℹ️  Already up to date"
-else
-    echo "🔄 Updates available, pulling..."
-    git pull origin main
-
-    if [ $? -eq 0 ]; then
-        echo "✅ Git pull successful"
-    else
-        echo "❌ Git pull failed"
-        echo "ℹ️  You may need to resolve conflicts manually"
-        echo "ℹ️  Or use: git stash && git pull origin main && git stash pop"
-        exit 1
-    fi
-fi
-echo ""
-
-# 변경사항 확인
-echo "📝 Recent changes:"
-git log -3 --oneline --decorate
-echo ""
-
-# Python 패키지 확인
-echo "🔍 Checking Python dependencies..."
-if [ -f requirements.txt ]; then
-    pip3 install -r requirements.txt --quiet
-    echo "✅ Dependencies checked"
-else
-    echo "⚠️  requirements.txt not found"
-fi
-echo ""
-
-# 봇 재시작
-echo "🚀 Starting trading bot..."
-BOT_STARTED=false
-
-# systemd 서비스가 있으면 사용
-if [ -f /etc/systemd/system/trading-bot.service ]; then
-    sudo systemctl start trading-bot
-    sleep 3
-
-    if systemctl is-active --quiet trading-bot; then
-        echo "✅ Trading bot started via systemd"
-        BOT_STARTED=true
-    else
-        echo "❌ systemd start failed, trying direct execution..."
-    fi
-fi
-
-# systemd가 없거나 실패한 경우 직접 실행
-if [ "$BOT_STARTED" = false ]; then
-    nohup python3 one_minute_surge_entry_strategy.py > trading_bot.log 2>&1 &
-    sleep 3
-
-    if pgrep -f one_minute_surge_entry_strategy.py > /dev/null; then
-        echo "✅ Trading bot started in background (PID: $(pgrep -f one_minute_surge_entry_strategy.py))"
-        BOT_STARTED=true
-    else
-        echo "❌ Failed to start trading bot"
-        echo "ℹ️  Check logs: tail -50 trading_bot.log"
-    fi
-fi
-echo ""
-
-# 상태 확인
-echo "========================================="
-echo "📊 Status Check"
-echo "========================================="
-
-if systemctl is-active --quiet trading-bot 2>/dev/null; then
-    echo "✅ Trading bot is running (systemd)"
-    sudo systemctl status trading-bot --no-pager | head -15
-elif pgrep -f one_minute_surge_entry_strategy.py > /dev/null; then
-    echo "✅ Trading bot is running (background)"
-    echo "   PID: $(pgrep -f one_minute_surge_entry_strategy.py)"
-    echo "   Check logs: tail -f trading_bot.log"
-else
-    echo "❌ Trading bot is NOT running"
+# 3. 변경사항 확인 (stash 필요 여부)
+if ! git diff-index --quiet HEAD --; then
+    echo "⚠️ 로컬 변경사항 감지 - stash 저장 중..."
+    git stash save "Auto-stash before update $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "   ✅ stash 저장됨"
     echo ""
-    echo "🔍 Troubleshooting:"
-    echo "   1. Check logs: tail -50 trading_bot.log"
-    echo "   2. Check errors: grep -i error trading_bot.log"
-    echo "   3. Manual start: python3 one_minute_surge_entry_strategy.py"
 fi
 
+# 4. 최신 코드 가져오기
+echo "⬇️ GitHub에서 최신 코드 가져오는 중..."
+git pull origin main
+echo "   ✅ 업데이트 완료"
 echo ""
-echo "========================================="
-echo "✅ Update completed!"
-echo "========================================="
+
+# 5. 업데이트된 커밋 확인
+echo "📋 최신 커밋:"
+git log -3 --oneline
 echo ""
-echo "📝 Next steps:"
-echo "   1. Monitor logs: tail -f trading_bot.log"
-echo "   2. Check Telegram notifications"
-echo "   3. Verify positions/trading activity"
+
+# 6. 서비스 재시작
+echo "🔄 서비스 재시작 중..."
+systemctl restart alpha_z_trading.service
+echo "   ✅ 재시작 명령 실행됨"
+sleep 3
 echo ""
-echo "🔄 Rollback if needed:"
-echo "   1. Stop bot: sudo systemctl stop trading-bot"
-echo "   2. Restore: rm -rf ~/vivik && mv $BACKUP_DIR ~/vivik"
-echo "   3. Restart: sudo systemctl start trading-bot"
+
+# 7. 서비스 상태 확인
+echo "📊 서비스 상태:"
+systemctl status alpha_z_trading.service --no-pager -l | head -20
+echo ""
+
+# 8. 프로세스 확인
+echo "🔍 실행 중인 프로세스:"
+ps aux | grep "[a]lpha_z_triple_strategy"
+echo ""
+
+# 9. 최근 로그 확인
+echo "📋 최근 로그 (20줄):"
+tail -20 alpha_z_trading.log
+echo ""
+
+echo "========================================"
+echo "✅ 업데이트 및 재시작 완료!"
+echo "========================================"
+echo ""
+echo "📌 실시간 로그 확인:"
+echo "   tail -f alpha_z_trading.log"
+echo ""
+echo "📌 서비스 로그 확인:"
+echo "   journalctl -u alpha_z_trading.service -f"
 echo ""
