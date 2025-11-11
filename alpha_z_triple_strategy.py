@@ -34,7 +34,7 @@ A전략(3분봉 바닥급등타점) + B전략(15분봉 급등초입) + C전략(3
   * 예: 2.5% 수익 도달 → 2.0%로 하락 시 청산 (1.0% 이익 확보)
 
 전략 조건:
-A전략(3분봉 바닥급등타점): 4개 조건 - (200봉이내 MA80-MA480 골든크로스 or MA80<MA480) + 200봉이내 BB80-BB480 골든크로스 + 60봉이내 MA20-MA80 골든크로스 + 5봉이내 종가<MA5 골든크로스
+A전략(3분봉 바닥급등타점): 4개 조건 - (200봉이내 MA80-MA480 골든크로스 or MA80<MA480) + 200봉이내 BB80-BB480 골든크로스 + 60봉이내 MA5-MA80 골든크로스 + 5봉이내 종가<MA5 골든크로스
 B전략(15분봉 급등초입): 6개 조건 - 200봉이내 MA80-MA480 골든크로스 + BB골든크로스 + MA5-MA20골든크로스 + BB200상단-MA480 상향돌파 + MA20-MA80 데드크로스 or 이격도조건 + 시가대비고가 3%이상
 C전략(30분봉 급등맥점): 2개 기본조건 + 3개 타점(A/B/C) - 기본조건(50봉이내 MA80-MA480 골든크로스 or MA80<MA480 + 100봉이내 MA480-BB200 크로스) + A/B/C 타점 중 1개
 """
@@ -1232,7 +1232,7 @@ class FifteenMinuteMegaStrategy:
                 conditions.append(f"[A전략 조건2] BB80-BB480 골든크로스 계산 실패: {e}")
                 condition2 = False
             
-            # 조건 3: 60봉이내 MA20-MA80 골든크로스
+            # 조건 3: 60봉이내 MA5-MA80 골든크로스
             condition3 = False
             condition3_detail = "골든크로스 없음"
             
@@ -1245,21 +1245,21 @@ class FifteenMinuteMegaStrategy:
                         if abs(prev_idx) > len(df_calc) or abs(curr_idx) > len(df_calc):
                             continue
                             
-                        ma20_prev = df_calc['ma20'].iloc[prev_idx]
-                        ma20_curr = df_calc['ma20'].iloc[curr_idx]
+                        ma5_prev = df_calc['ma5'].iloc[prev_idx]
+                        ma5_curr = df_calc['ma5'].iloc[curr_idx]
                         ma80_prev = df_calc['ma80'].iloc[prev_idx]
                         ma80_curr = df_calc['ma80'].iloc[curr_idx]
                         
-                        if (pd.notna(ma20_prev) and pd.notna(ma20_curr) and
+                        if (pd.notna(ma5_prev) and pd.notna(ma5_curr) and
                             pd.notna(ma80_prev) and pd.notna(ma80_curr) and
-                            ma20_prev <= ma80_prev and ma20_curr > ma80_curr):
+                            ma5_prev <= ma80_prev and ma5_curr > ma80_curr):
                             condition3 = True
-                            condition3_detail = f"{i}봉전 MA20-MA80 골든크로스"
+                            condition3_detail = f"{i}봉전 MA5-MA80 골든크로스"
                             break
                             
-                conditions.append(f"[A전략 조건3] 60봉이내 MA20-MA80 골든크로스 ({condition3_detail}): {condition3}")
+                conditions.append(f"[A전략 조건3] 60봉이내 MA5-MA80 골든크로스 ({condition3_detail}): {condition3}")
             except Exception as e:
-                conditions.append(f"[A전략 조건3] MA20-MA80 골든크로스 계산 실패: {e}")
+                conditions.append(f"[A전략 조건3] MA5-MA80 골든크로스 계산 실패: {e}")
                 condition3 = False
             
             # 조건 4: 5봉이내 종가<MA5 골든크로스
