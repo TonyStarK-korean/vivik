@@ -174,120 +174,140 @@ def get_open_positions():
 
 
 def get_recent_signals():
-    """최근 신호 로그 읽기"""
-    signals = []
+    """최근 신호 로그 읽기 (실제 데이터 연동)"""
+    try:
+        # 거래 로거 사용하여 실제 데이터 가져오기
+        from trading_signal_logger import get_trading_logger
+        logger = get_trading_logger()
+        return logger.get_recent_signals(50)
+        
+    except ImportError:
+        print("[WARNING] trading_signal_logger not available - using file reading")
+        
+        signals = []
+        # 로그 파일이 있으면 읽기
+        if os.path.exists(LOG_FILE):
+            try:
+                with open(LOG_FILE, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()[-50:]  # 최근 50개
+                    for line in lines:
+                        try:
+                            signal = json.loads(line.strip())
+                            signals.append(signal)
+                        except:
+                            continue
+            except Exception as e:
+                print(f"Error reading signal log: {e}")
 
-    # 로그 파일이 있으면 읽기
-    if os.path.exists(LOG_FILE):
-        try:
-            with open(LOG_FILE, 'r', encoding='utf-8') as f:
-                lines = f.readlines()[-50:]  # 최근 50개
-                for line in lines:
-                    try:
-                        signal = json.loads(line.strip())
-                        signals.append(signal)
-                    except:
-                        continue
-        except Exception as e:
-            print(f"Error reading signal log: {e}")
+        # 실제 로그가 없으면 샘플 데이터 (개발/테스트용)
+        if not signals:
+            print("[INFO] No real signals found - using sample data for demo")
+            signals = [
+                {
+                    'timestamp': '2025-11-10 14:28:30',
+                    'symbol': 'SOLUSDT',
+                    'strategy': 'A',
+                    'action': 'BUY',
+                    'price': 215.80,
+                    'status': '진입완료'
+                },
+                {
+                    'timestamp': '2025-11-10 14:15:12',
+                    'symbol': 'BNBUSDT',
+                    'strategy': 'C',
+                    'action': 'SELL',
+                    'price': 645.30,
+                    'status': '익절 +4.2%'
+                },
+                {
+                    'timestamp': '2025-11-10 13:58:45',
+                    'symbol': 'ADAUSDT',
+                    'strategy': 'B',
+                    'action': 'BUY',
+                    'price': 1.082,
+                    'status': '진입완료'
+                }
+            ]
 
-    # 로그가 없으면 샘플 데이터
-    if not signals:
-        signals = [
-            {
-                'timestamp': '2025-11-10 14:28:30',
-                'symbol': 'SOLUSDT',
-                'strategy': 'A',
-                'action': 'BUY',
-                'price': 215.80,
-                'status': '진입완료'
-            },
-            {
-                'timestamp': '2025-11-10 14:15:12',
-                'symbol': 'BNBUSDT',
-                'strategy': 'C',
-                'action': 'SELL',
-                'price': 645.30,
-                'status': '익절 +4.2%'
-            },
-            {
-                'timestamp': '2025-11-10 13:58:45',
-                'symbol': 'ADAUSDT',
-                'strategy': 'B',
-                'action': 'BUY',
-                'price': 1.082,
-                'status': '진입완료'
-            }
-        ]
-
-    return signals
+        return signals
 
 
 def calculate_strategy_stats():
-    """전략별 통계 실시간 계산 (신호 로그 기반)"""
-    stats = {
-        'strategy_a': {'win_count': 0, 'loss_count': 0, 'total_return': 0.0, 'win_rate': 0.0, 'total_trades': 0},
-        'strategy_b': {'win_count': 0, 'loss_count': 0, 'total_return': 0.0, 'win_rate': 0.0, 'total_trades': 0},
-        'strategy_c': {'win_count': 0, 'loss_count': 0, 'total_return': 0.0, 'win_rate': 0.0, 'total_trades': 0}
-    }
-
-    # 거래 이력 파일이 있으면 로드
-    if os.path.exists(TRADE_HISTORY_FILE):
-        try:
-            with open(TRADE_HISTORY_FILE, 'r', encoding='utf-8') as f:
-                trade_history = json.load(f)
-
-                for trade in trade_history:
-                    strategy = trade.get('strategy', '').upper()
-                    pnl = trade.get('pnl', 0.0)
-                    pnl_percent = trade.get('pnl_percent', 0.0)
-
-                    key = f'strategy_{strategy.lower()}'
-                    if key in stats:
-                        stats[key]['total_trades'] += 1
-                        if pnl > 0:
-                            stats[key]['win_count'] += 1
-                        else:
-                            stats[key]['loss_count'] += 1
-                        stats[key]['total_return'] += pnl_percent
-        except Exception as e:
-            print(f"Error loading trade history: {e}")
-
-    # 승률 계산
-    for key in stats:
-        total = stats[key]['win_count'] + stats[key]['loss_count']
-        if total > 0:
-            stats[key]['win_rate'] = (stats[key]['win_count'] / total) * 100.0
-        else:
-            stats[key]['win_rate'] = 0.0
-
-    # 샘플 데이터가 없으면 기본값 사용 (DEMO 모드)
-    if all(s['total_trades'] == 0 for s in stats.values()):
-        return {
-            'strategy_a': {
-                'win_count': 12,
-                'loss_count': 4,
-                'total_return': 18.5,
-                'win_rate': 75.0,
-                'total_trades': 16
-            },
-            'strategy_b': {
-                'win_count': 8,
-                'loss_count': 4,
-                'total_return': 12.3,
-                'win_rate': 66.7,
-                'total_trades': 12
-            },
-            'strategy_c': {
-                'win_count': 6,
-                'loss_count': 4,
-                'total_return': 9.8,
-                'win_rate': 60.0,
-                'total_trades': 10
-            }
+    """전략별 통계 실시간 계산 (실제 데이터 연동)"""
+    try:
+        # 거래 로거 사용하여 실제 통계 가져오기
+        from trading_signal_logger import get_trading_logger
+        logger = get_trading_logger()
+        return logger.calculate_strategy_stats()
+        
+    except ImportError:
+        print("[WARNING] trading_signal_logger not available - using file reading")
+        
+        stats = {
+            'strategy_a': {'win_count': 0, 'loss_count': 0, 'total_return': 0.0, 'win_rate': 0.0, 'total_trades': 0},
+            'strategy_b': {'win_count': 0, 'loss_count': 0, 'total_return': 0.0, 'win_rate': 0.0, 'total_trades': 0},
+            'strategy_c': {'win_count': 0, 'loss_count': 0, 'total_return': 0.0, 'win_rate': 0.0, 'total_trades': 0}
         }
 
-    return stats
+        # 거래 이력 파일이 있으면 로드
+        if os.path.exists(TRADE_HISTORY_FILE):
+            try:
+                with open(TRADE_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                    trade_history = json.load(f)
+
+                    for trade in trade_history:
+                        strategy = trade.get('strategy', '').upper()
+                        pnl = trade.get('pnl', 0.0)
+                        pnl_percent = trade.get('pnl_percent', 0.0)
+
+                        key = f'strategy_{strategy.lower()}'
+                        if key in stats:
+                            stats[key]['total_trades'] += 1
+                            if pnl > 0:
+                                stats[key]['win_count'] += 1
+                            else:
+                                stats[key]['loss_count'] += 1
+                            stats[key]['total_return'] += pnl_percent
+            except Exception as e:
+                print(f"Error loading trade history: {e}")
+
+        # 승률 계산
+        for key in stats:
+            total = stats[key]['win_count'] + stats[key]['loss_count']
+            if total > 0:
+                stats[key]['win_rate'] = round((stats[key]['win_count'] / total) * 100.0, 1)
+                stats[key]['total_return'] = round(stats[key]['total_return'], 1)
+            else:
+                stats[key]['win_rate'] = 0.0
+
+        # 실제 데이터가 없으면 샘플 데이터 (개발/테스트용)
+        if all(s['total_trades'] == 0 for s in stats.values()):
+            print("[INFO] No real trade history found - using sample data for demo")
+            return {
+                'strategy_a': {
+                    'win_count': 12,
+                    'loss_count': 4,
+                    'total_return': 18.5,
+                    'win_rate': 75.0,
+                    'total_trades': 16
+                },
+                'strategy_b': {
+                    'win_count': 8,
+                    'loss_count': 4,
+                    'total_return': 12.3,
+                    'win_rate': 66.7,
+                    'total_trades': 12
+                },
+                'strategy_c': {
+                    'win_count': 6,
+                    'loss_count': 4,
+                    'total_return': 9.8,
+                    'win_rate': 60.0,
+                    'total_trades': 10
+                }
+            }
+
+        return stats
 
 
 def get_strategy_stats():
@@ -315,7 +335,7 @@ def update_cache():
         except Exception as e:
             print(f"❌ Cache update error: {e}")
 
-        time.sleep(10)  # 10초마다 업데이트
+        time.sleep(3)  # 3초마다 업데이트 (실시간성 개선)
 
 
 # API 엔드포인트

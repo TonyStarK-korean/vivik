@@ -87,6 +87,24 @@ except ImportError:
     print("[INFO] improved_dca_position_manager.py 없음 - DCA 기능 비활성화")
     HAS_DCA_MANAGER = False
 
+# 거래 로깅 시스템 추가
+try:
+    from strategy_integration_patch import (
+        log_entry_signal, log_exit_signal, log_dca_signal,
+        get_trading_statistics, get_strategy_performance
+    )
+    HAS_TRADING_LOGGER = True
+    print("[INFO] 거래 로깅 시스템 연동 완료")
+except ImportError:
+    print("[INFO] strategy_integration_patch.py 없음 - 로깅 기능 비활성화")
+    HAS_TRADING_LOGGER = False
+    # 더미 함수들로 대체
+    def log_entry_signal(*args, **kwargs): pass
+    def log_exit_signal(*args, **kwargs): pass  
+    def log_dca_signal(*args, **kwargs): pass
+    def get_trading_statistics(): return {}
+    def get_strategy_performance(): return {}
+
 # 가상매매 제거 - 실전매매로 변경
 # try:
 #     from virtual_trading_manager import VirtualTradingManager
@@ -3000,6 +3018,23 @@ class FifteenMinuteMegaStrategy:
                 print(f"   🔥 레버리지: {leverage}배")
                 print(f"   💵 투입금액: ${position_value:.0f} USDT")
                 print(f"   📋 주문ID: {order['id']}")
+
+                # 📊 거래 진입 로그 기록
+                if HAS_TRADING_LOGGER:
+                    strategy_type = self._get_strategy_type(signal_data)
+                    log_entry_signal(
+                        symbol=clean_symbol,
+                        strategy=strategy_type,
+                        price=filled_price,
+                        quantity=filled_qty,
+                        leverage=leverage,
+                        metadata={
+                            'order_id': order['id'],
+                            'position_value': position_value,
+                            'signal_data': signal_data,
+                            'entry_time': get_korea_time().isoformat()
+                        }
+                    )
 
                 # DCA 매니저에 포지션 등록 (자동으로 1차, 2차 DCA 주문 생성)
                 if self.dca_manager:

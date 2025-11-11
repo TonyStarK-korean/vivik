@@ -28,6 +28,24 @@ import numpy as np
 
 # Legacy 고급/기본 Exit 시스템 Remove - New 4가지 Exit 방식만 Usage
 
+# 거래 로깅 시스템 추가
+try:
+    from strategy_integration_patch import (
+        log_entry_signal, log_exit_signal, log_dca_signal,
+        get_trading_statistics, get_strategy_performance
+    )
+    HAS_TRADING_LOGGER = True
+    print("[INFO] DCA 매니저 - 거래 로깅 시스템 연동 완료")
+except ImportError:
+    print("[INFO] DCA 매니저 - strategy_integration_patch.py 없음, 로깅 기능 비활성화")
+    HAS_TRADING_LOGGER = False
+    # 더미 함수들로 대체
+    def log_entry_signal(*args, **kwargs): pass
+    def log_exit_signal(*args, **kwargs): pass  
+    def log_dca_signal(*args, **kwargs): pass
+    def get_trading_statistics(): return {}
+    def get_strategy_performance(): return {}
+
 # 콘솔 색상 정의
 class Colors:
     RED = '\033[91m'
@@ -209,12 +227,10 @@ class ImprovedDCAPositionManager:
             'half_profit_threshold': 0.10,       # 10% 절반 Exit 기준 (미사용)
             
             # 시스템 Settings
-            'max_dca_stages': 2,            # 최대 Add매수 Stage
-            'max_symbol_dca_count': 3,      # Symbol당 최대 Cyclic trading 사이클
-            'max_total_positions': 10,      # 최대 보유 종목 수 (옵션A)
-            'api_retry_count': 3,           # API 재Attempt 횟수
-            'api_retry_delay': 1.0,         # API 재Attempt 지연 (초)
-            'sync_interval': 15,            # Sync 주기 (초)
+            'max_total_positions': 10,      # 최대 보유 종목 수
+            'api_retry_count': 3,           # API 재시도 횟수
+            'api_retry_delay': 1.0,         # API 재시도 지연 (초)
+            'sync_interval': 15,            # 동기화 주기 (초)
         }
         
         # 로거 Settings
@@ -225,6 +241,9 @@ class ImprovedDCAPositionManager:
         
         # 데이터 Load
         self.load_data()
+        
+        # 🔥 DCA 시스템 간소화 (불탄기만 사용)
+        self._apply_simplified_system()
         
         # 🔧 이미 체결된 주문들에 대한 Notification 기록 Add (중복 방지)
         self._register_existing_filled_orders()
@@ -687,6 +706,24 @@ class ImprovedDCAPositionManager:
                 self.save_data()
 
                 self.logger.info(f"New position added: {symbol} - Entry가: {entry_price}, Quantity: {quantity}")
+
+                # 📊 신규 포지션 진입 로그 기록 (DCA 매니저에서도 기록)
+                if HAS_TRADING_LOGGER:
+                    clean_symbol = symbol.replace('/USDT:USDT', '')
+                    log_entry_signal(
+                        symbol=clean_symbol,
+                        strategy="DCA",  # DCA 매니저에서 관리하는 포지션
+                        price=entry_price,
+                        quantity=quantity,
+                        leverage=leverage,
+                        metadata={
+                            'source': 'dca_manager',
+                            'notional': notional,
+                            'total_balance': total_balance,
+                            'position_id': symbol,
+                            'entry_time': get_korea_time().isoformat()
+                        }
+                    )
 
                 # 📋 최초 Entry 즉시 DCA 1차, 2차 지정가 주문 자동 Create
                 if total_balance and self.exchange:
@@ -1523,6 +1560,41 @@ class ImprovedDCAPositionManager:
                 
         except Exception as e:
             self.logger.error(f"수익 보호 단계 업데이트 실패: {e}")
+    
+    def _apply_simplified_system(self):
+        """🔥 DCA 시스템 간소화 - 불타기만 사용"""
+        try:
+            # 1. DCA 관련 설정 비활성화
+            self.config['dca_enabled'] = False
+            self.config['first_dca_enabled'] = False
+            self.config['second_dca_enabled'] = False
+            
+            # 2. DCA 트리거 비활성화 (실행되지 않도록 극심하게 설정)
+            self.config['first_dca_trigger'] = -999.0   # 절대 실행 안됨
+            self.config['second_dca_trigger'] = -999.0  # 절대 실행 안됨
+            
+            # 3. 불탄기 시스템 활성화 확인
+            self.config['pyramid_enabled'] = True
+            
+            # 4. 손절선 고정 설정
+            self.config['stop_loss_fixed'] = -0.03  # 초기 진입가 기준 -3%
+            self.config['stop_loss_never_change'] = True
+            
+            self.logger.info("🔥 DCA 시스템 간소화 완료: 불탄기만 사용, 손절선 고정(-3%)")
+            
+        except Exception as e:
+            self.logger.error(f"DCA 시스템 간소화 실패: {e}")
+            
+    def _should_skip_dca_messages(self, message: str) -> bool:
+        """🚫 DCA 관련 메시지 필터링"""
+        dca_keywords = [
+            'DCA 주문 누락',
+            '1차 DCA', '2차 DCA',
+            'DCA order', 'DCA limit',
+            '주문 누락', '재생성 필요',
+            'first_dca', 'second_dca'
+        ]
+        return any(keyword in str(message) for keyword in dca_keywords)
 
     def execute_pyramid_entry(self, symbol: str, pyramid_signal: Dict[str, Any]) -> bool:
         """
@@ -1958,6 +2030,26 @@ class ImprovedDCAPositionManager:
             
             self.logger.info(f"✅ 1차 DCA limit order placed: {position.symbol} - 주문가: ${dca_trigger_price:.4f}, Quantity: {quantity:.4f}")
             
+            # 📊 1차 DCA 주문 로그 기록 (DCA 매니저)
+            if HAS_TRADING_LOGGER:
+                clean_symbol = position.symbol.replace('/USDT:USDT', '')
+                log_dca_signal(
+                    symbol=clean_symbol,
+                    price=dca_trigger_price,
+                    quantity=quantity,
+                    stage="1차_DCA_주문",
+                    leverage=leverage,
+                    metadata={
+                        'source': 'dca_manager',
+                        'order_type': 'limit',
+                        'order_id': order_result['order_id'],
+                        'notional': dca_amount * leverage,
+                        'trigger_point': self.config['first_dca_trigger'],
+                        'cyclic_count': position.cyclic_count,
+                        'order_time': get_korea_time().isoformat()
+                    }
+                )
+            
             # 텔레그램 Notification
             if self.telegram_bot:
                 message = (f"📋 1차 DCA limit order placed\n"
@@ -2116,6 +2208,28 @@ class ImprovedDCAPositionManager:
                 
                 self.logger.critical(f"{exit_emoji} {exit_title}: {position.symbol} - Profit ratio: {profit_pct:.2f}% (Reason: {reason})")
                 
+                # 📊 전량 청산 로그 기록 (DCA 매니저)
+                if HAS_TRADING_LOGGER:
+                    clean_symbol = position.symbol.replace('/USDT:USDT', '')
+                    log_exit_signal(
+                        symbol=clean_symbol,
+                        price=current_price,
+                        entry_price=position.average_price,
+                        quantity=total_quantity,
+                        exit_reason=exit_description,
+                        leverage=10.0,  # 기본 레버리지
+                        metadata={
+                            'source': 'dca_manager',
+                            'exit_type': reason,
+                            'exit_emoji': exit_emoji,
+                            'exit_title': exit_title,
+                            'total_entries': len(position.entries),
+                            'cyclic_count': position.cyclic_count,
+                            'position_duration_hours': self._calculate_position_duration_hours(position),
+                            'exit_time': get_korea_time().isoformat()
+                        }
+                    )
+                
                 # 텔레그램 Notification
                 if self.telegram_bot:
                     message = (f"{exit_emoji} {exit_title}\n"
@@ -2132,6 +2246,17 @@ class ImprovedDCAPositionManager:
         except Exception as e:
             self.logger.error(f"긴급 Exit Failed {position.symbol}: {e}")
             return {'success': False, 'silent': False}
+
+    def _calculate_position_duration_hours(self, position: DCAPosition) -> float:
+        """포지션 보유 시간 계산 (시간 단위)"""
+        try:
+            from datetime import datetime
+            created_time = datetime.fromisoformat(position.created_at.replace('Z', '+00:00'))
+            current_time = get_korea_time()
+            duration = current_time - created_time
+            return round(duration.total_seconds() / 3600, 2)  # 시간 단위로 변환
+        except:
+            return 0.0
 
     def _get_exit_message_info(self, reason: str, profit_pct: float, position: DCAPosition) -> Tuple[str, str, str]:
         """Exit Type별 Message Info Create"""
@@ -2264,6 +2389,28 @@ class ImprovedDCAPositionManager:
                 profit_pct = (current_price - position.average_price) / position.average_price * 100
                 
                 self.logger.info(f"💰 부분 Exit Complete: {position.symbol} - {ratio*100:.0f}% Exit, Profit ratio: {profit_pct:.2f}% (Reason: {reason})")
+                
+                # 📊 부분 청산 로그 기록 (DCA 매니저)
+                if HAS_TRADING_LOGGER:
+                    clean_symbol = position.symbol.replace('/USDT:USDT', '')
+                    log_exit_signal(
+                        symbol=clean_symbol,
+                        price=current_price,
+                        entry_price=position.average_price,
+                        quantity=exit_quantity,
+                        exit_reason=f"부분청산 {ratio*100:.0f}% - {reason}",
+                        leverage=10.0,
+                        metadata={
+                            'source': 'dca_manager',
+                            'exit_type': 'partial_exit',
+                            'exit_ratio': ratio,
+                            'remaining_quantity': position.total_quantity,
+                            'remaining_entries': len([e for e in position.entries if e.is_active]),
+                            'partial_exit_reason': reason,
+                            'position_still_active': position.is_active,
+                            'exit_time': get_korea_time().isoformat()
+                        }
+                    )
                 
                 # 텔레그램 Notification
                 if self.telegram_bot:
@@ -2758,6 +2905,28 @@ class ImprovedDCAPositionManager:
                                 entry.entry_price = order['average'] if order['average'] else entry.entry_price
                                 
                                 self.logger.info(f"✅ DCA limit order 체결: {symbol} {entry.stage} - 체결가: ${entry.entry_price:.4f}, Quantity: {entry.quantity:.4f}")
+                                
+                                # 📊 DCA 체결 로그 기록 (DCA 매니저)
+                                if HAS_TRADING_LOGGER:
+                                    clean_symbol = symbol.replace('/USDT:USDT', '')
+                                    log_dca_signal(
+                                        symbol=clean_symbol,
+                                        price=entry.entry_price,
+                                        quantity=entry.quantity,
+                                        stage=f"{entry.stage}_체결",
+                                        leverage=entry.leverage,
+                                        metadata={
+                                            'source': 'dca_manager',
+                                            'order_type': 'limit_filled',
+                                            'order_id': entry.order_id,
+                                            'original_price': order.get('price', entry.entry_price),
+                                            'average_fill_price': order.get('average', entry.entry_price),
+                                            'fill_quantity': order.get('filled', entry.quantity),
+                                            'notional': entry.notional,
+                                            'fill_time': get_korea_time().isoformat(),
+                                            'stage_type': entry.stage
+                                        }
+                                    )
                                 
                                 # 중복 방지: 체결 Notification (Symbol_Stage_주문ID 조합으로 중복 체크)
                                 notification_key = f"{symbol}_{entry.stage}_{entry.order_id}"

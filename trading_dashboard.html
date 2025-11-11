@@ -457,7 +457,8 @@
 
                 const html = positions.map(pos => {
                     const pnl = parseFloat(pos.unRealizedProfit);
-                    const pnlPercent = ((pos.markPrice - pos.entryPrice) / pos.entryPrice * 100).toFixed(2);
+                    const originalPercent = ((pos.markPrice - pos.entryPrice) / pos.entryPrice * 100).toFixed(2);
+                    const leveragePercent = (originalPercent * pos.leverage).toFixed(2);
                     const positionValue = Math.abs(pos.positionAmt * pos.markPrice);
 
                     return `
@@ -465,7 +466,7 @@
                             <div class="position-header">
                                 <span class="position-symbol">${pos.symbol}</span>
                                 <span class="position-pnl ${pnl >= 0 ? 'positive' : 'negative'}">
-                                    ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USDT (${pnl >= 0 ? '+' : ''}${pnlPercent}%)
+                                    ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USDT (${pnl >= 0 ? '+' : ''}${leveragePercent}%)
                                 </span>
                             </div>
                             <div class="position-details">
@@ -474,6 +475,7 @@
                                 <div>수량: ${Math.abs(pos.positionAmt)} ${pos.symbol.replace('USDT', '')}</div>
                                 <div>레버리지: ${pos.leverage}x</div>
                                 <div>포지션 크기: $${positionValue.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+                                <div>원금 수익률: <span class="${originalPercent >= 0 ? 'positive' : 'negative'}">${originalPercent >= 0 ? '+' : ''}${originalPercent}%</span></div>
                                 <div>방향: <span class="${pos.positionAmt > 0 ? 'positive' : 'negative'}">${pos.positionAmt > 0 ? 'LONG 🟢' : 'SHORT 🔴'}</span></div>
                             </div>
                         </div>
@@ -631,8 +633,8 @@
             refreshData();
             // 1초마다 시간 업데이트
             setInterval(updateTime, 1000);
-            // 10초마다 자동 새로고침
-            setInterval(refreshData, 10000);
+            // 3초마다 자동 새로고침 (실시간성 개선)
+            setInterval(refreshData, 3000);
         });
     </script>
 </body>
