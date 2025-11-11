@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
 """
 A전략(15분봉 바닥타점) + B전략(15분봉 급등초입) + C전략(3분봉 바닥급등타점) 시스템
-레버리지 20배 적용
+레버리지 10배 적용
 
 거래 설정:
-- 레버리지: 20배
-- 포지션 크기: 원금 1.5% x 20배 레버리지 (30% 노출) - 고정 진입
+- 레버리지: 10배
+- 포지션 크기: 원금 1.5% x 10배 레버리지 (15% 노출) - 고정 진입
 - 최대 진입 종목: 10종목
 - 재진입: 순환매 활성화 (최대 3회 순환매)
-- 손절: 진입가 대비 -3% 전량 손절 (시드 대비 0.9% 손실)
+- 손절: 진입가 대비 -3% 전량 손절 (시드 대비 0.45% 손실)
 - 종목당 최대 비중: 1.5% (추가매수 없음)
 - 최대 원금 사용: 15% (10종목 × 1.5%)
-- 손실 계산: 1.5% × 20배 × -3% = 시드의 0.9% 손실
+- 손실 계산: 1.5% × 10배 × -3% = 시드의 0.45% 손실
 
 청산 시스템 (DCA 비활성화):
-- 최초 진입: 1.5% x 20배 = 30% 노출 시장가 매수 (추가매수 없음)
+- 최초 진입: 1.5% x 10배 = 15% 노출 시장가 매수 (추가매수 없음)
 - 손절: 진입가 대비 -3% 전량 손절
 - 이익실현: Trailing Stop 방식
   * 2-3% 수익 도달 시 추적 시작
@@ -163,7 +163,7 @@ class FifteenMinuteMegaStrategy:
             self.ws_provider = None
             print("[WARN] WebSocket OHLCV 제공자 없음")
         
-        # DCA 매니저 초기화 (레버리지 20배)
+        # DCA 매니저 초기화 (레버리지 10배)
         if HAS_DCA_MANAGER and self.private_exchange:
             self.dca_manager = ImprovedDCAPositionManager(
                 exchange=self.private_exchange,
@@ -171,11 +171,11 @@ class FifteenMinuteMegaStrategy:
                 stats_callback=None,  # 필요시 콜백 추가
                 strategy=self  # 전략 참조 전달
             )
-            # 레버리지 20배로 설정 업데이트
-            self.dca_manager.config['initial_leverage'] = 20.0
-            self.dca_manager.config['first_dca_leverage'] = 20.0
-            self.dca_manager.config['second_dca_leverage'] = 20.0
-            print("[INFO] DCA 매니저 초기화 완료 - 레버리지 20배 적용")
+            # 레버리지 10배로 설정 업데이트
+            self.dca_manager.config['initial_leverage'] = 10.0
+            self.dca_manager.config['first_dca_leverage'] = 10.0
+            self.dca_manager.config['second_dca_leverage'] = 10.0
+            print("[INFO] DCA 매니저 초기화 완료 - 레버리지 10배 적용")
         else:
             self.dca_manager = None
             print("[WARN] DCA 매니저 없음 - 프라이빗 API 필요")
@@ -201,9 +201,9 @@ class FifteenMinuteMegaStrategy:
         self.notification_cooldown = 3600  # 1시간 쿨다운
         
         print("15분봉 초필살기 전략 시스템 초기화 완료")
-        print(f"   레버리지: 20배")
-        print(f"   최초 진입: 1% (20% 노출)")
-        print(f"   최대 손실: 6% (시드 기준)")
+        print(f"   레버리지: 10배")
+        print(f"   최초 진입: 1.5% (15% 노출)")
+        print(f"   최대 손실: 0.45% (시드 기준)")
     
     def _setup_logger(self):
         """로거 설정"""
@@ -2832,12 +2832,11 @@ class FifteenMinuteMegaStrategy:
 ⏰ 신호발생: {timestamp}
 🎯 전략: {strategy_type}
 ━━━━━━━━━━━━━━━━━━━━━━
-🔥 레버리지: 20배
-💡 진입설정:
-   • 포지션: 1% 상당 (20% 노출)
-   • 1차 DCA: -3% (20% 노출)
-   • 2차 DCA: -6% (20% 노출)
-   • 손절: -10% (시드 6% 손실)
+🔥 레버리지: 10배
+💡 청산 설정:
+   • 포지션: 1.5% 상당 (15% 노출, 고정 진입)
+   • 손절: -3% 전량 손절 (시드 0.45% 손실)
+   • 익절: Trailing Stop (2-3% 최고점 추적)
 """
             
             self.telegram_bot.send_message(message)
@@ -2878,9 +2877,9 @@ class FifteenMinuteMegaStrategy:
             market = self.private_exchange.market(symbol)
             min_amount = market['limits']['amount']['min'] if market['limits']['amount']['min'] else 0
             
-            # 포지션 크기 계산 (1.5% x 20배 레버리지, DCA 없음)
+            # 포지션 크기 계산 (1.5% x 10배 레버리지, DCA 없음)
             position_value = free_usdt * 0.015  # 1.5% (고정 진입)
-            leverage = 20
+            leverage = 10
             quantity = (position_value * leverage) / price  # 실제 구매할 수량
             
             
@@ -2897,7 +2896,7 @@ class FifteenMinuteMegaStrategy:
 💳 보유잔고: ${free_usdt:.0f} USDT
 ⚠️ 실패사유: 잔고 부족
 ━━━━━━━━━━━━━━━━━━━━━━
-📊 레버리지: 20배
+📊 레버리지: 10배
 📈 목표진입: {position_value:.0f} USDT (1.5%)
 🕒 시간: {get_korea_time().strftime('%H:%M:%S')}"""
                 self._send_notification_once(symbol, "balance_insufficient", detailed_msg)
@@ -2918,7 +2917,7 @@ class FifteenMinuteMegaStrategy:
 📏 최소수량: {min_amount:.6f}
 ⚠️ 실패사유: 최소 주문 수량 미달
 ━━━━━━━━━━━━━━━━━━━━━━
-📊 레버리지: 20배
+📊 레버리지: 10배
 📈 목표진입: {position_value:.0f} USDT (1.5%)
 🕒 시간: {get_korea_time().strftime('%H:%M:%S')}"""
                 self._send_notification_once(symbol, "min_amount_insufficient", detailed_msg)
@@ -3016,7 +3015,7 @@ class FifteenMinuteMegaStrategy:
 ⚠️ 실패사유: 주문 처리 실패
 📋 오류정보: {order.get('info', '상세정보없음')}
 ━━━━━━━━━━━━━━━━━━━━━━
-📊 레버리지: 20배
+📊 레버리지: 10배
 🕒 시간: {get_korea_time().strftime('%H:%M:%S')}"""
                 self._send_notification_once(symbol, "order_failed", detailed_msg)
                 return False
@@ -3035,65 +3034,20 @@ class FifteenMinuteMegaStrategy:
 ⚠️ 실패사유: 시스템 오류
 📋 오류정보: {str(e)[:100]}
 ━━━━━━━━━━━━━━━━━━━━━━
-📊 레버리지: 20배
+📊 레버리지: 10배
 🕒 시간: {get_korea_time().strftime('%H:%M:%S')}"""
             self._send_notification_once(symbol, "execution_failed", detailed_msg)
             return False
     
     def _place_dca_orders(self, symbol, entry_price, base_quantity):
-        """DCA 주문 등록 (비활성화됨 - DCA 트리거가 -99%로 설정되어 실행되지 않음)"""
+        """손절 주문만 등록 (DCA 추가매수 없음)"""
         try:
             clean_symbol = symbol.replace('/USDT:USDT', '')
-            dca_orders = []
+            stop_orders = []
 
-            # 1차 DCA: -3% 가격에 1.5% 추가 매수 (비활성화)
-            dca1_price = entry_price * 0.97
-            balance = self.private_exchange.fetch_balance()
-            free_usdt = balance['USDT']['free']
-            dca1_value = free_usdt * 0.015  # 1.5%
-            dca1_quantity = (dca1_value * 20) / dca1_price  # 20배 레버리지
+            # DCA 추가매수 주문은 등록하지 않음 (완전 비활성화)
+            # 손절 주문만 자동 등록
 
-            if free_usdt >= dca1_value:
-                try:
-                    dca1_order = self.exchange.create_limit_buy_order(
-                        symbol=symbol,
-                        amount=dca1_quantity,
-                        price=dca1_price,
-                        params={'leverage': 20}
-                    )
-                    dca_orders.append({
-                        'stage': '1차_DCA',
-                        'price': dca1_price,
-                        'quantity': dca1_quantity,
-                        'order_id': dca1_order['id']
-                    })
-                    print(f"   📋 1차 DCA 주문 등록: ${dca1_price:,.4f} ({dca1_quantity:.6f})")
-                except Exception as e:
-                    print(f"   ⚠️ 1차 DCA 주문 실패: {e}")
-
-            # 2차 DCA: -6% 가격에 1.5% 추가 매수 (비활성화)
-            dca2_price = entry_price * 0.94
-            dca2_value = free_usdt * 0.015  # 1.5%
-            dca2_quantity = (dca2_value * 20) / dca2_price  # 20배 레버리지
-            
-            if free_usdt >= dca2_value:
-                try:
-                    dca2_order = self.exchange.create_limit_buy_order(
-                        symbol=symbol,
-                        amount=dca2_quantity,
-                        price=dca2_price,
-                        params={'leverage': 20}
-                    )
-                    dca_orders.append({
-                        'stage': '2차_DCA',
-                        'price': dca2_price,
-                        'quantity': dca2_quantity,
-                        'order_id': dca2_order['id']
-                    })
-                    print(f"   📋 2차 DCA 주문 등록: ${dca2_price:,.4f} ({dca2_quantity:.6f})")
-                except Exception as e:
-                    print(f"   ⚠️ 2차 DCA 주문 실패: {e}")
-            
             # 손절 주문: -3% (전량 손절)
             stop_price = entry_price * 0.97
             try:
@@ -3105,10 +3059,10 @@ class FifteenMinuteMegaStrategy:
                     price=None,
                     params={
                         'stopPrice': stop_price,
-                        'leverage': 20
+                        'leverage': 10
                     }
                 )
-                dca_orders.append({
+                stop_orders.append({
                     'stage': '손절',
                     'price': stop_price,
                     'quantity': base_quantity,
@@ -3117,16 +3071,16 @@ class FifteenMinuteMegaStrategy:
                 print(f"   🛑 손절 주문 등록: ${stop_price:,.4f} (-3%)")
             except Exception as e:
                 print(f"   ⚠️ 손절 주문 실패: {e}")
-            
-            # DCA 주문 정보를 active_positions에 저장
+
+            # 손절 주문 정보를 active_positions에 저장
             if symbol in self.active_positions:
-                self.active_positions[symbol]['dca_orders'] = dca_orders
-            
-            return dca_orders
-            
+                self.active_positions[symbol]['dca_orders'] = stop_orders
+
+            return stop_orders
+
         except Exception as e:
-            self.logger.error(f"DCA 주문 등록 실패: {e}")
-            print(f"❌ DCA 주문 등록 실패: {e}")
+            self.logger.error(f"손절 주문 등록 실패: {e}")
+            print(f"❌ 손절 주문 등록 실패: {e}")
             return []
     
     def get_total_balance(self):
@@ -3339,7 +3293,7 @@ class FifteenMinuteMegaStrategy:
         """🚀 IP 밴 방지 최고속도 연속 스캔 실행"""
         print("🚀 15분봉 초필살기 전략 연속 스캔 시작 (🔥 실전매매 모드 🔥)")
         print(f"   ⚡ 최적화 스캔 주기: {interval}초 (바이낸스 레이트 리밋 준수)")
-        print(f"   📊 레버리지: 20배")
+        print(f"   📊 레버리지: 10배")
         print(f"   🛡️ IP 밴 방지: 스마트 API 호출 제한 및 재사용 최적화")
         
         # 실제 잔고 조회

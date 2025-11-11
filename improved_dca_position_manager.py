@@ -147,11 +147,11 @@ class ImprovedDCAPositionManager:
         self.advanced_exit_system = None  # 고급 Exit 시스템 (미구현)
         self.basic_exit_system = None     # 기본 Exit 시스템 (미구현)
         
-        # Settings (Fixed 1.5% Entry with NO DCA - 추가매수 없이 고정 진입)
+        # Settings (Fixed 1.5% Entry with NO DCA - 추가매수 없이 고정 진입, 레버리지 10배)
         self.config = {
             # DCA Entry Settings (DCA 비활성화 - 추가매수 없음)
             'initial_weight': 0.015,      # 최초 Entry 비중 (1.5%) - 전체 비중의 1.5%
-            'initial_leverage': 10.0,     # 최초 Entry 레버리지
+            'initial_leverage': 10.0,     # 최초 Entry 레버리지 (10배)
             'first_dca_trigger': -99.0,   # 1차 Add매수 트리거 (비활성화)
             'first_dca_weight': 0.025,    # 1차 Add매수 비중 (비활성화)
             'first_dca_leverage': 10.0,   # 1차 Add매수 레버리지 (비활성화)
