@@ -3315,8 +3315,8 @@ class ImprovedDCAPositionManager:
                     if len(df) < 10:
                         continue
                     
-                    # BB600 계산 (표준편차 2.9 Usage)
-                    bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(df, period=600, std=2.9)
+                    # BB600 계산 (표준편차 3.0 Usage)
+                    bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(df, period=600, std=3.0)
                     
                     # 최근 몇 count 캔들의 고점이 BB600 상단선을 돌파했는지 Confirm (Current 포함 최근 3봉)
                     for i in range(-3, 0):  # 최근 3봉 체크

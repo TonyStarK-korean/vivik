@@ -57,7 +57,7 @@ class BasicExitSystem:
             # BB 돌파 Exit Settings
             'bb_breakthrough': {
                 'bb_period': 600,                    # BB600 기간
-                'bb_std': 2.0,                      # 표준편차
+                'bb_std': 3.0,                      # 표준편차
                 'exit_ratio': 0.5,                  # 50% Exit
                 'timeframes': ['15m', '30m']        # 15분/30minute candles
             },

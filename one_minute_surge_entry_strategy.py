@@ -113,13 +113,13 @@ def _find_golden_cross_vectorized_alias(self, df, fast_ma_col, slow_ma_col, rece
 # count선된 DCA Cyclic trading수 시스템 import Add
 try:
     from improved_dca_position_manager import ImprovedDCAPositionManager
-    HAS_DCA_SYSTEM = True
+    HAS_DCA_SYSTEM = False  # ⚠️ 임시 비활성화
 except ImportError:
     print("[ERROR] improved_dca_position_manager.py not found - DCA system disabled")
     # Fallback to legacy system
     try:
         from dca_position_manager import DCAPositionManager as ImprovedDCAPositionManager
-        HAS_DCA_SYSTEM = True
+        HAS_DCA_SYSTEM = False  # ⚠️ 임시 비활성화
         print("[INFO] Using legacy DCA system")
     except ImportError:
         ImprovedDCAPositionManager = None

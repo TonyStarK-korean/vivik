@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-A전략(15분봉 바닥타점) + B전략(15분봉 급등초입) + C전략(3분봉 바닥급등타점) + D전략(30분봉 급등맥점) 시스템
+A전략(15분봉 바닥타점) + B전략(15분봉 급등초입) + C전략(3분봉 바닥급등타점) 시스템
 레버리지 10배 적용
 
 거래 설정:
@@ -37,11 +37,6 @@ A전략(15분봉 바닥타점) + B전략(15분봉 급등초입) + C전략(3분�
 A전략(15분봉 바닥타점): 5개 조건 - (ma80<ma480 and ma5<ma480) and BB복합조건 및 골든크로스 and 시가대비고가조건
 B전략(15분봉 급등초입): 6개 조건 - 기존 급등초입 조건 + 시가대비고가조건 추가
 C전략(3분봉 바닥급등타점): 4개 조건 - MA80-MA480 골든크로스 and BB80-BB480 골든크로스(15봉이내) and 종가<MA5 골든크로스 and 시가대비고가조건
-D전략(30분봉 급등맥점): 기본조건 2개 + 진입타점 3개 (A/B/C타점 중 1개 이상)
-  기본조건: (50봉이내 MA80-MA480 골든크로스 OR MA80<MA480) AND (100봉이내 MA480-BB200 크로스)
-  A타점: 50봉이내 MA5-MA480 골든크로스 AND MA5<MA20 AND 1봉전 캔들MA5돌파
-  B타점: 50봉이내 MA480하향돌파 AND MA5-MA480 이격도3%이내 AND MA5>MA80 AND 5봉이내 MA5-MA480 골든크로스
-  C타점: 30봉이내 데드크로스 AND MA5<MA80 AND 5봉이내 MA5-MA20 골든크로스 AND 현재가<MA20
 """
 
 import os
@@ -1025,12 +1020,9 @@ class FifteenMinuteMegaStrategy:
             
             # C전략: 3분봉 필살기 타점 체크
             strategy_c_signal, strategy_c_conditions = self._check_strategy_c_3min_precision(symbol)
-
-            # D전략: 30분봉 급등 맥점 체크
-            strategy_d_signal, strategy_d_conditions = self._check_strategy_d_30min_surge_peak(symbol)
-
+            
             # 최종 신호 결정
-            is_signal = strategy_a_signal or strategy_b_signal or strategy_c_signal or strategy_d_signal
+            is_signal = strategy_a_signal or strategy_b_signal or strategy_c_signal
             
             
             # 전략별 상세 정보 구성
@@ -1041,7 +1033,7 @@ class FifteenMinuteMegaStrategy:
                     'name': 'A전략(바닥타점)'
                 },
                 'strategy_b': {
-                    'signal': strategy_b_signal,
+                    'signal': strategy_b_signal, 
                     'conditions': strategy_b_conditions,
                     'name': 'B전략(급등초입)'
                 },
@@ -1049,19 +1041,13 @@ class FifteenMinuteMegaStrategy:
                     'signal': strategy_c_signal,
                     'conditions': strategy_c_conditions,
                     'name': 'C전략(3분봉 바닥급등타점)'
-                },
-                'strategy_d': {
-                    'signal': strategy_d_signal,
-                    'conditions': strategy_d_conditions,
-                    'name': 'D전략(30분봉 급등맥점)'
                 }
             }
-
+            
             # 기존 조건 리스트 구성 (호환성 유지)
             conditions.extend(strategy_a_conditions)
             conditions.extend(strategy_b_conditions)
             conditions.extend(strategy_c_conditions)
-            conditions.extend(strategy_d_conditions)
             
             # 전략별 결과 추가
             if strategy_a_signal:
@@ -2824,8 +2810,6 @@ class FifteenMinuteMegaStrategy:
                     strategy_signals.append("B전략")
                 if details.get('strategy_c', {}).get('signal', False):
                     strategy_signals.append("C전략")
-                if details.get('strategy_d', {}).get('signal', False):
-                    strategy_signals.append("D전략")
                 
                 if strategy_signals:
                     strategy_type = "+".join(strategy_signals)
@@ -2837,19 +2821,20 @@ class FifteenMinuteMegaStrategy:
                 return
             
             # 전략별 제목 결정
-            num_strategies = strategy_type.count("전략")
-            if num_strategies >= 3:
-                title = f"🚨🚨 {strategy_type} 동시 진입 신호 🚨🚨"
-            elif num_strategies == 2:
-                title = f"🚨 {strategy_type} 동시 진입 신호 🚨"
+            if "A전략" in strategy_type and "B전략" in strategy_type and "C전략" in strategy_type:
+                title = "🚨 A+B+C전략 동시 진입 신호 🚨"
+            elif "A전략" in strategy_type and "B전략" in strategy_type:
+                title = "🚨 A+B전략 동시 진입 신호 🚨"
+            elif "A전략" in strategy_type and "C전략" in strategy_type:
+                title = "🚨 A+C전략 동시 진입 신호 🚨"
+            elif "B전략" in strategy_type and "C전략" in strategy_type:
+                title = "🚨 B+C전략 동시 진입 신호 🚨"
             elif "A전략" in strategy_type:
                 title = "🚨 A전략(바닥타점) 진입 신호 🚨"
             elif "B전략" in strategy_type:
                 title = "🚨 B전략(급등초입) 진입 신호 🚨"
             elif "C전략" in strategy_type:
                 title = "🚨 C전략(3분봉 바닥급등타점) 진입 신호 🚨"
-            elif "D전략" in strategy_type:
-                title = "🚨 D전략(30분봉 급등맥점) 진입 신호 🚨"
             else:
                 title = "🚨 진입 신호 🚨"
 
@@ -3615,366 +3600,6 @@ def emergency_close_all_positions():
         
     except Exception as e:
         print(f"❌ 긴급 청산 실패: {e}")
-
-    def _check_strategy_d_30min_surge_peak(self, symbol):
-        """D전략: 30분봉 급등 맥점 (A/B/C 3개 타점)"""
-        try:
-            conditions = []
-
-            # 30분봉 데이터 조회 (100봉 필요, 여유분 포함 150봉)
-            try:
-                df_30m = None
-
-                # 1차 시도: WebSocket Provider
-                if self.ws_provider:
-                    try:
-                        if hasattr(self.ws_provider, 'get_cached_ohlcv'):
-                            df_30m = self.ws_provider.get_cached_ohlcv(symbol, '30m', 150)
-                        else:
-                            df_30m = self.ws_provider.get_ohlcv(symbol, '30m', 150)
-                    except:
-                        df_30m = None
-
-                # 2차 시도: REST API
-                if df_30m is None or len(df_30m) < 100:
-                    try:
-                        df_30m = self.exchange.fetch_ohlcv(symbol, '30m', limit=150)
-                    except Exception as api_error:
-                        return False, [f"[D전략] 30분봉 데이터 조회 실패: {api_error}"]
-
-                if df_30m is None or len(df_30m) < 100:
-                    return False, [f"[D전략] 30분봉 데이터 부족: {len(df_30m) if df_30m is not None else 0}봉"]
-
-                # DataFrame 변환
-                df_calc = pd.DataFrame(df_30m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df_calc['timestamp'] = pd.to_datetime(df_calc['timestamp'], unit='ms')
-
-                # 기술적 지표 계산
-                df_calc = self._calculate_technical_indicators(df_calc)
-
-                if len(df_calc) < 100:
-                    return False, [f"[D전략] 지표 계산 후 데이터 부족: {len(df_calc)}봉"]
-
-            except Exception as e:
-                return False, [f"[D전략] 데이터 처리 실패: {e}"]
-
-            # 기본조건1: 50봉이내 ma80-ma480 골든크로스 OR ma80<ma480
-            condition1 = False
-            condition1_detail = "미충족"
-
-            try:
-                current_ma80 = df_calc['ma80'].iloc[-1]
-                current_ma480 = df_calc['ma480'].iloc[-1]
-
-                if pd.notna(current_ma80) and pd.notna(current_ma480):
-                    if current_ma80 < current_ma480:
-                        condition1 = True
-                        condition1_detail = f"MA80<MA480"
-                    else:
-                        if len(df_calc) >= 51:
-                            for i in range(min(50, len(df_calc) - 1)):
-                                idx_curr = -(i + 1)
-                                idx_prev = -(i + 2)
-
-                                ma80_curr = df_calc['ma80'].iloc[idx_curr]
-                                ma480_curr = df_calc['ma480'].iloc[idx_curr]
-                                ma80_prev = df_calc['ma80'].iloc[idx_prev]
-                                ma480_prev = df_calc['ma480'].iloc[idx_prev]
-
-                                if (pd.notna(ma80_curr) and pd.notna(ma480_curr) and
-                                    pd.notna(ma80_prev) and pd.notna(ma480_prev)):
-                                    if ma80_prev <= ma480_prev and ma80_curr > ma480_curr:
-                                        condition1 = True
-                                        condition1_detail = f"{i}봉전 MA80-MA480 골든크로스"
-                                        break
-
-                conditions.append(f"[D전략 기본조건1] {condition1_detail}: {condition1}")
-                if not condition1:
-                    return False, conditions
-
-            except Exception as e:
-                conditions.append(f"[D전략 기본조건1] 오류: {e}")
-                return False, conditions
-
-            # 기본조건2: 100봉이내 ma480-bb200상단선 크로스
-            condition2 = False
-            condition2_detail = "미충족"
-
-            try:
-                if len(df_calc) >= 101:
-                    for i in range(min(100, len(df_calc) - 1)):
-                        idx_curr = -(i + 1)
-                        idx_prev = -(i + 2)
-
-                        ma480_curr = df_calc['ma480'].iloc[idx_curr]
-                        bb200_upper_curr = df_calc['bb200_upper'].iloc[idx_curr]
-                        ma480_prev = df_calc['ma480'].iloc[idx_prev]
-                        bb200_upper_prev = df_calc['bb200_upper'].iloc[idx_prev]
-
-                        if (pd.notna(ma480_curr) and pd.notna(bb200_upper_curr) and
-                            pd.notna(ma480_prev) and pd.notna(bb200_upper_prev)):
-
-                            if ma480_prev <= bb200_upper_prev and ma480_curr > bb200_upper_curr:
-                                condition2 = True
-                                condition2_detail = f"{i}봉전 MA480 상향돌파"
-                                break
-
-                            if ma480_prev >= bb200_upper_prev and ma480_curr < bb200_upper_curr:
-                                condition2 = True
-                                condition2_detail = f"{i}봉전 MA480 하향돌파"
-                                break
-
-                conditions.append(f"[D전략 기본조건2] {condition2_detail}: {condition2}")
-                if not condition2:
-                    return False, conditions
-
-            except Exception as e:
-                conditions.append(f"[D전략 기본조건2] 오류: {e}")
-                return False, conditions
-
-            # 진입타점: A타점 OR B타점 OR C타점
-            a_point = False
-            b_point = False
-            c_point = False
-
-            # A타점 체크
-            try:
-                a_cnt = 0
-                a_details = []
-
-                # A1: 50봉이내 ma5-ma480 골든크로스
-                if len(df_calc) >= 51:
-                    for i in range(min(50, len(df_calc) - 1)):
-                        idx_curr = -(i + 1)
-                        idx_prev = -(i + 2)
-
-                        ma5_curr = df_calc['ma5'].iloc[idx_curr]
-                        ma480_curr_val = df_calc['ma480'].iloc[idx_curr]
-                        ma5_prev = df_calc['ma5'].iloc[idx_prev]
-                        ma480_prev_val = df_calc['ma480'].iloc[idx_prev]
-
-                        if (pd.notna(ma5_curr) and pd.notna(ma480_curr_val) and
-                            pd.notna(ma5_prev) and pd.notna(ma480_prev_val)):
-                            if ma5_prev <= ma480_prev_val and ma5_curr > ma480_curr_val:
-                                a_details.append(f"A1: {i}봉전 MA5-MA480 골든크로스")
-                                a_cnt += 1
-                                break
-
-                if a_cnt == 0:
-                    a_details.append("A1: 골든크로스 없음")
-
-                # A2: 현재봉 ma5<ma20
-                ma5_now = df_calc['ma5'].iloc[-1]
-                ma20_now = df_calc['ma20'].iloc[-1]
-
-                if pd.notna(ma5_now) and pd.notna(ma20_now):
-                    if ma5_now < ma20_now:
-                        a_details.append(f"A2: MA5<MA20")
-                        a_cnt += 1
-                    else:
-                        a_details.append(f"A2: MA5>=MA20")
-
-                # A3: 1봉전 캔들이 ma5 돌파
-                if len(df_calc) >= 2:
-                    open_prev = df_calc['open'].iloc[-2]
-                    close_prev = df_calc['close'].iloc[-2]
-                    ma5_prev_val = df_calc['ma5'].iloc[-2]
-
-                    if pd.notna(open_prev) and pd.notna(close_prev) and pd.notna(ma5_prev_val):
-                        if open_prev < ma5_prev_val and close_prev > ma5_prev_val:
-                            a_details.append(f"A3: 1봉전 MA5 돌파")
-                            a_cnt += 1
-                        else:
-                            a_details.append(f"A3: MA5 미돌파")
-
-                if a_cnt == 3:
-                    a_point = True
-
-                for detail in a_details:
-                    conditions.append(f"[D전략 A타점] {detail}")
-
-            except Exception as e:
-                conditions.append(f"[D전략 A타점] 오류: {e}")
-
-            # B타점 체크 (NEW)
-            try:
-                b_cnt = 0
-                b_details = []
-
-                # B1: 50봉이내 ma480이 bb200상단선 하향돌파
-                if len(df_calc) >= 51:
-                    for i in range(min(50, len(df_calc) - 1)):
-                        idx_curr = -(i + 1)
-                        idx_prev = -(i + 2)
-
-                        ma480_c = df_calc['ma480'].iloc[idx_curr]
-                        bb200_c = df_calc['bb200_upper'].iloc[idx_curr]
-                        ma480_p = df_calc['ma480'].iloc[idx_prev]
-                        bb200_p = df_calc['bb200_upper'].iloc[idx_prev]
-
-                        if (pd.notna(ma480_c) and pd.notna(bb200_c) and
-                            pd.notna(ma480_p) and pd.notna(bb200_p)):
-                            if ma480_p >= bb200_p and ma480_c < bb200_c:
-                                b_details.append(f"B1: {i}봉전 MA480 하향돌파")
-                                b_cnt += 1
-                                break
-
-                if b_cnt == 0:
-                    b_details.append("B1: 하향돌파 없음")
-
-                # B2: ma5-ma480 이격도 3%이내
-                ma5_curr_val = df_calc['ma5'].iloc[-1]
-                ma480_curr_val = df_calc['ma480'].iloc[-1]
-
-                if pd.notna(ma5_curr_val) and pd.notna(ma480_curr_val) and ma480_curr_val > 0:
-                    gap = abs(ma5_curr_val - ma480_curr_val) / ma480_curr_val
-                    if gap <= 0.03:
-                        b_details.append(f"B2: 이격도 {gap*100:.2f}%")
-                        b_cnt += 1
-                    else:
-                        b_details.append(f"B2: 이격도 {gap*100:.2f}% (3% 초과)")
-
-                # B3: ma5>ma80
-                ma80_curr_val = df_calc['ma80'].iloc[-1]
-
-                if pd.notna(ma5_curr_val) and pd.notna(ma80_curr_val):
-                    if ma5_curr_val > ma80_curr_val:
-                        b_details.append(f"B3: MA5>MA80")
-                        b_cnt += 1
-                    else:
-                        b_details.append(f"B3: MA5<=MA80")
-
-                # B4: 5봉이내 ma5-ma480 골든크로스
-                if len(df_calc) >= 6:
-                    for i in range(min(5, len(df_calc) - 1)):
-                        idx_curr = -(i + 1)
-                        idx_prev = -(i + 2)
-
-                        ma5_c = df_calc['ma5'].iloc[idx_curr]
-                        ma480_c = df_calc['ma480'].iloc[idx_curr]
-                        ma5_p = df_calc['ma5'].iloc[idx_prev]
-                        ma480_p = df_calc['ma480'].iloc[idx_prev]
-
-                        if all(pd.notna(x) for x in [ma5_c, ma480_c, ma5_p, ma480_p]):
-                            if ma5_p <= ma480_p and ma5_c > ma480_c:
-                                b_details.append(f"B4: {i}봉전 MA5-MA480 골든크로스")
-                                b_cnt += 1
-                                break
-
-                if b_cnt < 4:
-                    b_details.append("B4: 골든크로스 없음")
-
-                if b_cnt == 4:
-                    b_point = True
-
-                for detail in b_details:
-                    conditions.append(f"[D전략 B타점] {detail}")
-
-            except Exception as e:
-                conditions.append(f"[D전략 B타점] 오류: {e}")
-
-            # C타점 체크 (기존 B타점)
-            try:
-                c_cnt = 0
-                c_details = []
-
-                # C1: 30봉이내 데드크로스
-                if len(df_calc) >= 31:
-                    for i in range(min(30, len(df_calc) - 1)):
-                        idx_curr = -(i + 1)
-                        idx_prev = -(i + 2)
-
-                        ma5_curr_val = df_calc['ma5'].iloc[idx_curr]
-                        ma20_curr_val = df_calc['ma20'].iloc[idx_curr]
-                        ma80_curr_val = df_calc['ma80'].iloc[idx_curr]
-                        ma5_prev_val = df_calc['ma5'].iloc[idx_prev]
-                        ma20_prev_val = df_calc['ma20'].iloc[idx_prev]
-                        ma80_prev_val = df_calc['ma80'].iloc[idx_prev]
-
-                        if all(pd.notna(x) for x in [ma5_curr_val, ma20_curr_val, ma80_curr_val,
-                                                     ma5_prev_val, ma20_prev_val, ma80_prev_val]):
-                            if ma5_prev_val >= ma80_prev_val and ma5_curr_val < ma80_curr_val:
-                                c_details.append(f"C1: {i}봉전 MA5-MA80 데드크로스")
-                                c_cnt += 1
-                                break
-                            if ma20_prev_val >= ma80_prev_val and ma20_curr_val < ma80_curr_val:
-                                c_details.append(f"C1: {i}봉전 MA20-MA80 데드크로스")
-                                c_cnt += 1
-                                break
-
-                if c_cnt == 0:
-                    c_details.append("C1: 데드크로스 없음")
-
-                # C2: ma5<ma80
-                ma5_current = df_calc['ma5'].iloc[-1]
-                ma80_current = df_calc['ma80'].iloc[-1]
-
-                if pd.notna(ma5_current) and pd.notna(ma80_current):
-                    if ma5_current < ma80_current:
-                        c_details.append(f"C2: MA5<MA80")
-                        c_cnt += 1
-                    else:
-                        c_details.append(f"C2: MA5>=MA80")
-
-                # C3: 5봉이내 ma5-ma20 골든크로스
-                if len(df_calc) >= 6:
-                    for i in range(min(5, len(df_calc) - 1)):
-                        idx_curr = -(i + 1)
-                        idx_prev = -(i + 2)
-
-                        ma5_c = df_calc['ma5'].iloc[idx_curr]
-                        ma20_c = df_calc['ma20'].iloc[idx_curr]
-                        ma5_p = df_calc['ma5'].iloc[idx_prev]
-                        ma20_p = df_calc['ma20'].iloc[idx_prev]
-
-                        if all(pd.notna(x) for x in [ma5_c, ma20_c, ma5_p, ma20_p]):
-                            if ma5_p <= ma20_p and ma5_c > ma20_c:
-                                c_details.append(f"C3: {i}봉전 MA5-MA20 골든크로스")
-                                c_cnt += 1
-                                break
-
-                if c_cnt < 3:
-                    c_details.append("C3: 골든크로스 없음")
-
-                # C4: 현재가<ma20
-                current_price = df_calc['close'].iloc[-1]
-                ma20_curr = df_calc['ma20'].iloc[-1]
-
-                if pd.notna(current_price) and pd.notna(ma20_curr):
-                    if current_price < ma20_curr:
-                        c_details.append(f"C4: 현재가<MA20")
-                        c_cnt += 1
-                    else:
-                        c_details.append(f"C4: 현재가>=MA20")
-
-                if c_cnt == 4:
-                    c_point = True
-
-                for detail in c_details:
-                    conditions.append(f"[D전략 C타점] {detail}")
-
-            except Exception as e:
-                conditions.append(f"[D전략 C타점] 오류: {e}")
-
-            # 최종 판정: A OR B OR C
-            entry_signal = a_point or b_point or c_point
-
-            if entry_signal:
-                entry_type = []
-                if a_point:
-                    entry_type.append("A타점")
-                if b_point:
-                    entry_type.append("B타점")
-                if c_point:
-                    entry_type.append("C타점")
-                conditions.append(f"[D전략 진입신호] {' + '.join(entry_type)} 충족 ✅")
-                return True, conditions
-            else:
-                conditions.append(f"[D전략 진입신호] 모든 타점 미충족")
-                return False, conditions
-
-        except Exception as e:
-            return False, [f"[D전략] 전체 오류: {e}"]
 
 if __name__ == "__main__":
     main()
