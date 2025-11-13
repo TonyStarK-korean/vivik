@@ -2976,15 +2976,29 @@ class FifteenMinuteMegaStrategy:
         # 변수 초기화 (에러 처리에서 안전하게 사용하기 위해)
         free_usdt = 0.0
         position_value = 0.0
-        
+
         try:
             if not self.private_exchange:
                 print(f"⚠️ 프라이빗 API 없음 - {signal_data['clean_symbol']} 거래 건너뛰기")
                 return False
-                
+
             symbol = signal_data['symbol']
             price = signal_data['price']
             clean_symbol = signal_data['clean_symbol']
+
+            # 🔍 전략 디버그: signal_data 내용 확인
+            print(f"\n🔍 [전략 디버그] {clean_symbol} signal_data 확인:")
+            strategy_details = signal_data.get('strategy_details')
+            if strategy_details:
+                a_signal = strategy_details.get('strategy_a', {}).get('signal', False)
+                b_signal = strategy_details.get('strategy_b', {}).get('signal', False)
+                c_signal = strategy_details.get('strategy_c', {}).get('signal', False)
+                print(f"   A전략 신호: {a_signal}")
+                print(f"   B전략 신호: {b_signal}")
+                print(f"   C전략 신호: {c_signal}")
+            else:
+                print(f"   ⚠️ strategy_details가 없습니다!")
+                print(f"   signal_data keys: {signal_data.keys()}")
             
             # 포지션 개수 제한 체크 (최대 10개)
             portfolio = self.get_portfolio_summary()
