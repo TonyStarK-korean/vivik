@@ -8,7 +8,7 @@ A전략(3분봉 바닥급등타점) + B전략(15분봉 급등초입) + C전략(3
 - 초기 진입: 원금 1.0% x 10배 레버리지 (10% 노출)
 - 최대 진입 종목: 10종목
 - 재진입: 순환매 활성화 (최대 3회 순환매)
-- 손절: 평균가 대비 -3% 전량 손절 (단계별 갱신)
+- 손절: 평균가 대비 -10% 전량 손절 (단계별 갱신)
 - 종목당 최대 비중: 2.0% (초기 1.0% + 불타기 최대 1.0%)
 - 최대 원금 사용: 20% (10종목 × 2.0%)
 
@@ -24,17 +24,22 @@ A전략(3분봉 바닥급등타점) + B전략(15분봉 급등초입) + C전략(3
 - 불타기 금지: 최고점 대비 -2.0% 이상 급락 시
 
 청산 시스템:
-- 손절: 평균가 대비 -3% 전량 손절 (불타기 후 평균가 갱신)
-  * 초기 진입만: 1.0% × 10배 × -3% = 시드의 0.30% 손실
-  * 1차 불타기: 1.5% × 10배 × -3% = 시드의 0.45% 손실
-  * 2차 불타기: 2.0% × 10배 × -3% = 시드의 0.60% 손실
+- 손절: 평균가 대비 -10% 전량 손절 (불타기 후 평균가 갱신)
+  * 초기 진입만: 1.0% × 10배 × -10% = 시드의 1.00% 손실
+  * 1차 불타기: 1.5% × 10배 × -10% = 시드의 1.50% 손실
+  * 2차 불타기: 2.0% × 10배 × -10% = 시드의 2.00% 손실
 - 이익실현: Trailing Stop 방식
   * 2-3% 수익 도달 시 추적 시작
   * 최고점 대비 1.5% 하락 시 손실 전환 전 전량 청산
   * 예: 2.5% 수익 도달 → 2.0%로 하락 시 청산 (1.0% 이익 확보)
 
 전략 조건:
-A전략(3분봉 바닥급등타점): 5개 조건 - (500봉이내 MA80-MA480 골든크로스 or MA80<MA480) + 500봉이내 BB80-BB480 골든크로스 + 5봉이내 MA5-MA80 골든크로스 + 5봉이내 종가<MA5 골든크로스 + 현재 MA5>MA20
+A전략(3분봉 바닥급등타점): 5개 조건
+  - 조건1: 500봉이내 MA80-MA480 골든크로스 or MA80<MA480
+  - 조건2: 500봉이내 BB80-BB480 골든크로스
+  - 조건3: 10봉이내 (저가<BB80하한 or MA5<BB80하한)
+  - 조건4: 종가<MA5
+  - 조건5: 10봉이내 MA5-MA20 골든크로스 and MA20<MA80
 B전략(15분봉 급등초입): 6개 조건 - 200봉이내 MA80-MA480 골든크로스 + BB골든크로스 + MA5-MA20골든크로스 + BB200상단-MA480 상향돌파 + MA20-MA80 데드크로스 or 이격도조건 + 시가대비고가 3%이상
 C전략(30분봉 급등맥점): 2개 기본조건 + 3개 타점(A/B/C) - 기본조건(50봉이내 MA80-MA480 골든크로스 or MA80<MA480 + 100봉이내 MA480-BB200 크로스) + A/B/C 타점 중 1개
 """
@@ -1298,83 +1303,98 @@ class FifteenMinuteMegaStrategy:
                 conditions.append(f"[A전략 조건2] BB80-BB480 골든크로스 계산 실패: {e}")
                 condition2 = False
             
-            # 조건 3: 5봉이내 MA5-MA80 골든크로스
+            # 조건 3: 10봉이내 (저가<BB80하한선 OR MA5<BB80하한선)
             condition3 = False
-            condition3_detail = "골든크로스 없음"
-            
+            condition3_detail = "미충족"
+
             try:
-                if len(df_calc) >= 6:
-                    for i in range(1, min(6, len(df_calc))):
-                        prev_idx = -(i+1)
-                        curr_idx = -i
-                        
-                        if abs(prev_idx) > len(df_calc) or abs(curr_idx) > len(df_calc):
-                            continue
-                            
-                        ma5_prev = df_calc['ma5'].iloc[prev_idx]
-                        ma5_curr = df_calc['ma5'].iloc[curr_idx]
-                        ma80_prev = df_calc['ma80'].iloc[prev_idx]
-                        ma80_curr = df_calc['ma80'].iloc[curr_idx]
-                        
-                        if (pd.notna(ma5_prev) and pd.notna(ma5_curr) and
-                            pd.notna(ma80_prev) and pd.notna(ma80_curr) and
-                            ma5_prev <= ma80_prev and ma5_curr > ma80_curr):
-                            condition3 = True
-                            condition3_detail = f"{i}봉전 MA5-MA80 골든크로스"
+                bb80_lower = df_calc.get('bb80_lower', pd.Series())
+
+                if len(bb80_lower) >= 11 and len(df_calc) >= 11:
+                    for i in range(min(10, len(df_calc))):
+                        idx = -(i+1)
+
+                        if abs(idx) > len(df_calc):
                             break
-                            
-                conditions.append(f"[A전략 조건3] 5봉이내 MA5-MA80 골든크로스 ({condition3_detail}): {condition3}")
+
+                        low_price = df_calc['low'].iloc[idx]
+                        ma5_value = df_calc['ma5'].iloc[idx]
+                        bb80_lower_value = bb80_lower.iloc[idx]
+
+                        # 저가<BB80하한선 OR MA5<BB80하한선
+                        if pd.notna(low_price) and pd.notna(bb80_lower_value) and low_price < bb80_lower_value:
+                            condition3 = True
+                            condition3_detail = f"{i+1}봉전 저가<BB80하한선"
+                            break
+
+                        if pd.notna(ma5_value) and pd.notna(bb80_lower_value) and ma5_value < bb80_lower_value:
+                            condition3 = True
+                            condition3_detail = f"{i+1}봉전 MA5<BB80하한선"
+                            break
+
+                conditions.append(f"[A전략 조건3] 10봉이내 (저가<BB80하한 OR MA5<BB80하한) ({condition3_detail}): {condition3}")
             except Exception as e:
-                conditions.append(f"[A전략 조건3] MA5-MA80 골든크로스 계산 실패: {e}")
+                conditions.append(f"[A전략 조건3] BB80하한선 조건 계산 실패: {e}")
                 condition3 = False
             
-            # 조건 4: 5봉이내 종가<MA5 골든크로스
+            # 조건 4: 종가<MA5
             condition4 = False
-            condition4_detail = "골든크로스 없음"
-            
+            condition4_detail = "미충족"
+
             try:
-                if len(df_calc) >= 6:
-                    for i in range(1, min(6, len(df_calc) - 1)):  # 1봉전부터 5봉전까지
-                        cross_idx = -(i+1)  # 골든크로스 봉
-                        prev_idx = -(i+2)   # 골든크로스 이전봉
-                        
-                        if abs(prev_idx) > len(df_calc):
-                            break
-                            
-                        close_prev = df_calc['close'].iloc[prev_idx]
-                        close_curr = df_calc['close'].iloc[cross_idx]
-                        ma5_prev = df_calc['ma5'].iloc[prev_idx]
-                        ma5_curr = df_calc['ma5'].iloc[cross_idx]
-                        
-                        if (pd.notna(close_prev) and pd.notna(close_curr) and
-                            pd.notna(ma5_prev) and pd.notna(ma5_curr) and
-                            close_prev < ma5_prev and close_curr >= ma5_curr):
-                            condition4 = True
-                            condition4_detail = f"{i}봉전 종가-MA5 골든크로스"
-                            break
-                            
-                conditions.append(f"[A전략 조건4] 5봉이내 종가<MA5 골든크로스 ({condition4_detail}): {condition4}")
+                current_close = df_calc['close'].iloc[-1]
+                current_ma5 = df_calc['ma5'].iloc[-1]
+
+                if pd.notna(current_close) and pd.notna(current_ma5):
+                    if current_close < current_ma5:
+                        condition4 = True
+                        condition4_detail = f"종가({current_close:.6f}) < MA5({current_ma5:.6f})"
+                    else:
+                        condition4_detail = f"종가({current_close:.6f}) >= MA5({current_ma5:.6f})"
+
+                conditions.append(f"[A전략 조건4] 종가<MA5 ({condition4_detail}): {condition4}")
             except Exception as e:
-                conditions.append(f"[A전략 조건4] 종가<MA5 골든크로스 계산 실패: {e}")
+                conditions.append(f"[A전략 조건4] 종가<MA5 계산 실패: {e}")
                 condition4 = False
             
-            # 조건 5: 현재 MA5 > MA20
+            # 조건 5: 10봉이내 MA5-MA20 골든크로스 AND MA20<MA80
             condition5 = False
-            condition5_detail = "MA5 ≤ MA20"
-            
+            condition5_detail = "미충족"
+
             try:
-                ma5_current = df_calc['ma5'].iloc[-1]
+                # 10봉이내 MA5-MA20 골든크로스 체크
+                golden_cross_found = False
+                if len(df_calc) >= 11:
+                    for i in range(min(10, len(df_calc) - 1)):
+                        curr_idx = -(i+1)
+                        prev_idx = -(i+2)
+
+                        if abs(prev_idx) > len(df_calc):
+                            break
+
+                        ma5_prev = df_calc['ma5'].iloc[prev_idx]
+                        ma5_curr = df_calc['ma5'].iloc[curr_idx]
+                        ma20_prev = df_calc['ma20'].iloc[prev_idx]
+                        ma20_curr = df_calc['ma20'].iloc[curr_idx]
+
+                        if (pd.notna(ma5_prev) and pd.notna(ma5_curr) and
+                            pd.notna(ma20_prev) and pd.notna(ma20_curr) and
+                            ma5_prev <= ma20_prev and ma5_curr > ma20_curr):
+                            golden_cross_found = True
+                            break
+
+                # 현재 MA20<MA80 체크
                 ma20_current = df_calc['ma20'].iloc[-1]
-                
-                if pd.notna(ma5_current) and pd.notna(ma20_current) and ma5_current > ma20_current:
-                    condition5 = True
-                    condition5_detail = f"MA5({ma5_current:.2f}) > MA20({ma20_current:.2f})"
-                else:
-                    condition5_detail = f"MA5({ma5_current:.2f}) ≤ MA20({ma20_current:.2f})"
-                    
-                conditions.append(f"[A전략 조건5] 현재 MA5>MA20 ({condition5_detail}): {condition5}")
+                ma80_current = df_calc['ma80'].iloc[-1]
+                ma20_below_ma80 = pd.notna(ma20_current) and pd.notna(ma80_current) and ma20_current < ma80_current
+
+                # 둘 다 충족해야 함
+                condition5 = golden_cross_found and ma20_below_ma80
+                condition5_detail = f"골든크로스={golden_cross_found}, MA20<MA80={ma20_below_ma80}"
+
+                conditions.append(f"[A전략 조건5] 10봉이내 MA5-MA20 골든크로스 AND MA20<MA80 ({condition5_detail}): {condition5}")
             except Exception as e:
-                conditions.append(f"[A전략 조건5] MA5>MA20 조건 계산 실패: {e}")
+                conditions.append(f"[A전략 조건5] MA5-MA20 골든크로스 AND MA20<MA80 계산 실패: {e}")
                 condition5 = False
             
             
@@ -2939,7 +2959,7 @@ class FifteenMinuteMegaStrategy:
 🔥 레버리지: 10배
 💡 청산 설정:
    • 포지션: 1.5% 상당 (15% 노출, 고정 진입)
-   • 손절: -3% 전량 손절 (시드 0.45% 손실)
+   • 손절: -10% 전량 손절 (시드 1.50% 손실)
    • 익절: Trailing Stop (2-3% 최고점 추적)
 """
             
@@ -3172,7 +3192,7 @@ class FifteenMinuteMegaStrategy:
    • 총 PnL: ${portfolio['total_unrealized_pnl']:+.0f} USDT
 ━━━━━━━━━━━━━━━━━━━━━━
 🎯 청산 설정 (DCA 비활성화):
-   • 손절: ${filled_price * 0.97:,.4f} (-3% 전량)
+   • 손절: ${filled_price * 0.90:,.4f} (-10% 전량)
    • 익절: Trailing Stop (2-3% 최고점 추적)
 ⚠️ 실제 거래 - 리스크 관리 필수!"""
                 self._send_notification_once(symbol, "entry_success", message)
@@ -3224,8 +3244,8 @@ class FifteenMinuteMegaStrategy:
             # DCA 추가매수 주문은 등록하지 않음 (완전 비활성화)
             # 손절 주문만 자동 등록
 
-            # 손절 주문: -3% (전량 손절)
-            stop_price = entry_price * 0.97
+            # 손절 주문: -10% (전량 손절)
+            stop_price = entry_price * 0.90
             try:
                 stop_order = self.exchange.create_order(
                     symbol=symbol,
@@ -3244,7 +3264,7 @@ class FifteenMinuteMegaStrategy:
                     'quantity': base_quantity,
                     'order_id': stop_order['id']
                 })
-                print(f"   🛑 손절 주문 등록: ${stop_price:,.4f} (-3%)")
+                print(f"   🛑 손절 주문 등록: ${stop_price:,.4f} (-10%)")
             except Exception as e:
                 print(f"   ⚠️ 손절 주문 실패: {e}")
 
@@ -3602,18 +3622,29 @@ class FifteenMinuteMegaStrategy:
                         # 출구 전략 체크 (SuperTrend, BB600, 누적수익보호 등)
                         if active_count > 0:
                             try:
-                                # 현재 가격 조회
+                                # 현재 가격 조회 및 청산 신호 체크
                                 current_prices = {}
                                 for symbol, position in self.dca_manager.positions.items():
                                     if position.is_active:
                                         try:
                                             ticker = self.private_exchange.fetch_ticker(symbol)
-                                            current_prices[symbol] = ticker['last']
-                                        except:
-                                            pass
+                                            current_price = ticker['last']
+                                            current_prices[symbol] = current_price
 
-                                # 출구 전략 체크 (DCA 매니저가 자동으로 처리)
-                                # sync_with_exchange()에서 이미 처리되므로 별도 호출 불필요
+                                            # 🔥 청산 신호 체크 (손절, 익절, SuperTrend, BB600 등)
+                                            exit_signal = self.dca_manager.check_all_new_exit_signals(symbol, current_price)
+                                            if exit_signal:
+                                                clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
+                                                print(f"🚨 {clean_symbol} 청산 신호 감지: {exit_signal.get('exit_type', 'UNKNOWN')}")
+
+                                                # 청산 실행
+                                                exit_result = self.dca_manager.execute_new_exit(symbol, exit_signal)
+                                                if exit_result and exit_result.get('success'):
+                                                    print(f"   ✅ {clean_symbol} 청산 완료!")
+                                                else:
+                                                    print(f"   ⚠️ {clean_symbol} 청산 실패")
+                                        except Exception as e:
+                                            print(f"   ⚠️ {symbol} 청산 체크 실패: {e}")
 
                                 # 순환매 통계 출력 (안전한 접근)
                                 cyclic_stats = self.dca_manager.get_cyclic_statistics()

@@ -80,12 +80,13 @@ class PositionStage(Enum):
     CLOSING = "closing"          # Exit 중
 
 class ExitType(Enum):
-    """Exit Type - New 5가지 Exit 방식"""
+    """Exit Type - New 6가지 Exit 방식"""
     SUPERTREND_EXIT = "supertrend_exit"       # SuperTrend 전량Exit
     BB600_PARTIAL_EXIT = "bb600_partial_exit" # BB600 50% 익절Exit
     BREAKEVEN_PROTECTION = "breakeven_protection" # 절반 하락 Exit
     WEAK_RISE_DUMP_PROTECTION = "weak_rise_dump_protection" # Approx상승후 급락 리스크 times피
     DCA_CYCLIC_EXIT = "dca_cyclic_exit"       # DCA Cyclic trading 일부Exit
+    PEAK_PROFIT_EXIT = "peak_profit_exit"     # 15분봉 BB/MA 피크 전량익절
 
 class CyclicState(Enum):
     """Cyclic trading Status"""
@@ -132,13 +133,14 @@ class DCAPosition:
     last_cyclic_entry: str = ""  # 마지막 Cyclic trading Entry Time
     total_cyclic_profit: float = 0.0  # Cumulative Cyclic trading 수익
     
-    # New 5가지 Exit 방식 추적
+    # New 6가지 Exit 방식 추적
     max_profit_pct: float = 0.0  # 최대 Profit ratio 추적
     bb600_exit_done: bool = False  # BB600 50% Exit Complete 여부
     breakeven_protection_active: bool = False  # Approx수익 보호 Active화 여부
     breakeven_exit_done: bool = False  # 본절보호Exit Complete 여부 (중복 방지용)
     supertrend_exit_done: bool = False  # SuperTrend Exit Complete 여부
     weak_rise_dump_exit_done: bool = False  # Approx상승후 급락 리스크 times피 Exit Complete 여부
+    peak_profit_exit_done: bool = False  # 15분봉 BB/MA 피크 전량익절 Complete 여부
     
     # Trailing 스탑 관련 필드
     trailing_stop_active: bool = False  # Trailing 스탑 Active화 여부
@@ -4168,45 +4170,189 @@ class ImprovedDCAPositionManager:
                 }
             
             return None
-            
+
         except Exception as e:
             self.logger.error(f"Approx상승후 급락 리스크 times피 Confirmation failed {symbol}: {e}")
             return None
-    
+
+    def check_peak_profit_exit_signal(self, symbol: str, current_price: float, position: DCAPosition) -> Optional[Dict[str, Any]]:
+        """6. 15분봉 BB/MA 피크 전량익절: 최대 수익 구간 포착하여 전량 익절
+
+        조건 (모두 충족 시 전량 익절):
+        1. 15분봉상 bb80_upper > bb200_upper
+        2. ma20 > bb200_upper
+        3. ma80 - bb200_upper 이격도 3%이상
+        4. 5봉이내 ma5 > bb80_upper (골든크로스)
+        5. ma5 - ma80 이격도 0.5%이내
+        """
+        try:
+            if position.peak_profit_exit_done:
+                return None
+
+            # 15분봉 데이터 조회
+            ohlcv = self.exchange.fetch_ohlcv(symbol, '15m', limit=500)
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+            if len(df) < 200:
+                return None
+
+            # 지표 계산 (indicators.py의 calculate_indicators 사용하거나 직접 계산)
+            try:
+                from indicators import calculate_indicators
+                df = calculate_indicators(df, self.logger)
+                if df is None:
+                    return None
+            except:
+                # 지표 직접 계산
+                df['ma5'] = df['close'].rolling(window=5).mean()
+                df['ma20'] = df['close'].rolling(window=20).mean()
+                df['ma80'] = df['close'].rolling(window=80).mean()
+
+                # BB80, BB200 계산
+                for period in [80, 200]:
+                    rolling_mean = df['close'].rolling(window=period).mean()
+                    rolling_std = df['close'].rolling(window=period).std()
+                    df[f'bb{period}_upper'] = rolling_mean + (rolling_std * 2)
+                    df[f'bb{period}_lower'] = rolling_mean - (rolling_std * 2)
+
+            # 필수 컬럼 확인
+            required_cols = ['ma5', 'ma20', 'ma80', 'bb80_upper', 'bb200_upper']
+            if not all(col in df.columns for col in required_cols):
+                self.logger.debug(f"필수 지표 컬럼 누락: {symbol}")
+                return None
+
+            # 최근 데이터 추출
+            recent = df.tail(5)  # 최근 5봉
+            latest = df.iloc[-1]  # 최신 봉
+
+            # 조건 체크
+            conditions_met = []
+            conditions_failed = []
+
+            # 조건 1: bb80_upper > bb200_upper
+            cond1 = latest['bb80_upper'] > latest['bb200_upper']
+            if cond1:
+                conditions_met.append(f"조건1: BB80상단({latest['bb80_upper']:.4f}) > BB200상단({latest['bb200_upper']:.4f})")
+            else:
+                conditions_failed.append(f"조건1 미충족: BB80상단({latest['bb80_upper']:.4f}) <= BB200상단({latest['bb200_upper']:.4f})")
+
+            # 조건 2: ma20 > bb200_upper
+            cond2 = latest['ma20'] > latest['bb200_upper']
+            if cond2:
+                conditions_met.append(f"조건2: MA20({latest['ma20']:.4f}) > BB200상단({latest['bb200_upper']:.4f})")
+            else:
+                conditions_failed.append(f"조건2 미충족: MA20({latest['ma20']:.4f}) <= BB200상단({latest['bb200_upper']:.4f})")
+
+            # 조건 3: ma80 - bb200_upper 이격도 3%이상
+            ma80_bb200_gap = (latest['ma80'] - latest['bb200_upper']) / latest['bb200_upper']
+            cond3 = ma80_bb200_gap >= 0.03
+            if cond3:
+                conditions_met.append(f"조건3: MA80-BB200상단 이격도 {ma80_bb200_gap*100:.2f}% >= 3%")
+            else:
+                conditions_failed.append(f"조건3 미충족: MA80-BB200상단 이격도 {ma80_bb200_gap*100:.2f}% < 3%")
+
+            # 조건 4: 5봉이내 ma5 > bb80_upper (골든크로스)
+            ma5_cross_bb80 = False
+            cross_position = -1
+            for i in range(len(recent)):
+                if recent['ma5'].iloc[i] > recent['bb80_upper'].iloc[i]:
+                    # 골든크로스 확인: 이전 봉에서는 아래였는지 체크
+                    if i > 0 and recent['ma5'].iloc[i-1] <= recent['bb80_upper'].iloc[i-1]:
+                        ma5_cross_bb80 = True
+                        cross_position = i
+                        break
+                    # 또는 현재 위에 있고 이전에도 위였다면 (이미 골든크로스 상태 유지)
+                    elif i == len(recent) - 1:  # 최신 봉
+                        ma5_cross_bb80 = True
+                        cross_position = i
+
+            cond4 = ma5_cross_bb80
+            if cond4:
+                conditions_met.append(f"조건4: 5봉이내 MA5 > BB80상단 (위치: {cross_position})")
+            else:
+                conditions_failed.append(f"조건4 미충족: 5봉이내 MA5 > BB80상단 골든크로스 없음")
+
+            # 조건 5: ma5 - ma80 이격도 0.5%이내
+            ma5_ma80_gap = abs(latest['ma5'] - latest['ma80']) / latest['ma80']
+            cond5 = ma5_ma80_gap <= 0.005
+            if cond5:
+                conditions_met.append(f"조건5: MA5-MA80 이격도 {ma5_ma80_gap*100:.3f}% <= 0.5%")
+            else:
+                conditions_failed.append(f"조건5 미충족: MA5-MA80 이격도 {ma5_ma80_gap*100:.3f}% > 0.5%")
+
+            # 모든 조건 충족 시 익절 신호
+            all_conditions_met = cond1 and cond2 and cond3 and cond4 and cond5
+
+            if all_conditions_met:
+                current_profit_pct = (current_price - position.average_price) / position.average_price
+
+                self.logger.warning(f"🎯 15분봉 BB/MA 피크 전량익절 신호: {symbol}")
+                self.logger.warning(f"   현재 수익률: {current_profit_pct*100:.2f}%")
+                for cond in conditions_met:
+                    self.logger.warning(f"   ✅ {cond}")
+
+                return {
+                    'exit_type': ExitType.PEAK_PROFIT_EXIT.value,
+                    'exit_ratio': 1.0,  # 전량 익절
+                    'current_profit_pct': current_profit_pct * 100,
+                    'current_price': current_price,
+                    'conditions_met': conditions_met,
+                    'trigger_info': f"15분봉 BB/MA 피크 포착 (수익률: {current_profit_pct*100:.2f}%)"
+                }
+            else:
+                # 디버그용: 조건 미충족 사유 로깅 (너무 자주 출력되지 않도록 조절)
+                if len(conditions_met) >= 3:  # 3개 이상 조건 충족 시만 로깅
+                    self.logger.debug(f"피크익절 조건 부분충족 {symbol}: {len(conditions_met)}/5")
+                    for fail in conditions_failed:
+                        self.logger.debug(f"   ❌ {fail}")
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"15분봉 BB/MA 피크 익절 확인 실패 {symbol}: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return None
+
     def check_all_new_exit_signals(self, symbol: str, current_price: float) -> Optional[Dict[str, Any]]:
-        """New 5가지 Exit 방식 종합 Confirm (우선순위 적용)"""
+        """New 6가지 Exit 방식 종합 Confirm (우선순위 적용)"""
         try:
             if symbol not in self.positions:
                 return None
-            
+
             position = self.positions[symbol]
             if not position.is_active:
                 return None
-            
+
             # 1순위: SuperTrend 전량Exit (Profit ratio 조건 + SuperTrend 시그널)
             supertrend_exit = self.check_supertrend_exit_signal(symbol, current_price, position)
             if supertrend_exit:
                 return supertrend_exit
-            
-            # 2순위: BB600 50% 익절 (10% 이상에서 우선 Execute)
+
+            # 2순위: 15분봉 BB/MA 피크 전량익절 (최대 수익 포착)
+            peak_profit_exit = self.check_peak_profit_exit_signal(symbol, current_price, position)
+            if peak_profit_exit:
+                return peak_profit_exit
+
+            # 3순위: BB600 50% 익절 (10% 이상에서 우선 Execute)
             bb600_exit = self.check_bb600_exit_signal(symbol, current_price, position)
             if bb600_exit:
                 return bb600_exit
-            
-            # 3순위: Approx상승후 급락 리스크 times피 (New 5번째 Exit)
+
+            # 4순위: Approx상승후 급락 리스크 times피 (New 5번째 Exit)
             weak_rise_dump_exit = self.check_weak_rise_dump_protection_exit(symbol, current_price, position)
             if weak_rise_dump_exit:
                 return weak_rise_dump_exit
-            
-            # 4순위: 본절보호Exit (Trailing 스톱, 절반하락 보호, Approx수익 보호)
+
+            # 5순위: 본절보호Exit (Trailing 스톱, 절반하락 보호, Approx수익 보호)
             breakeven_exit = self.check_breakeven_protection_exit(symbol, current_price, position)
             if breakeven_exit:
                 return breakeven_exit
-            
-            # 5순위: DCA Cyclic trading 일부Exit은 Legacy 시스템 Maintain
-            
+
+            # 6순위: DCA Cyclic trading 일부Exit은 Legacy 시스템 Maintain
+
             return None
-            
+
         except Exception as e:
             self.logger.error(f"New Exit Confirmation failed {symbol}: {e}")
             return None
@@ -4288,6 +4434,13 @@ class ImprovedDCAPositionManager:
                 # Trailing 스탑으로 나머지 50% Exit Complete
                 position.trailing_stop_active = False
                 self.logger.info(f"✅ Trailing 스탑 Complete: {symbol}")
+            elif exit_type == ExitType.PEAK_PROFIT_EXIT.value:
+                # 15분봉 BB/MA 피크 전량익절은 전량 Exit이므로 모든 Exit Complete Process
+                position.peak_profit_exit_done = True
+                position.supertrend_exit_done = True
+                position.bb600_exit_done = True
+                position.weak_rise_dump_exit_done = True
+                position.breakeven_exit_done = True
             elif exit_type == ExitType.BREAKEVEN_PROTECTION.value:
                 # 본절보호Exit은 전량 Exit이므로 모든 Exit Complete Process
                 position.breakeven_exit_done = True
@@ -4357,7 +4510,15 @@ class ImprovedDCAPositionManager:
                           f"Current수익: {exit_signal['current_profit_pct']:.1f}%\n"
                           f"SuperTrend(10-2): 5봉이내 Exit신호\n"
                           f"Exit량: 100% (전량)")
-            
+
+            elif exit_type == ExitType.PEAK_PROFIT_EXIT.value:
+                emoji = "🎯"
+                title = "15분봉 BB/MA 피크 전량익절"
+                conditions_str = "\n".join([f"   ✅ {cond}" for cond in exit_signal.get('conditions_met', [])])
+                details = (f"수익률: {exit_signal['current_profit_pct']:.2f}%\n"
+                          f"충족조건 (5개):\n{conditions_str}\n"
+                          f"Exit량: 100% (전량)")
+
             else:
                 emoji = "📤"
                 title = "Exit Complete"
