@@ -4315,7 +4315,7 @@ class ImprovedDCAPositionManager:
             return None
 
     def check_all_new_exit_signals(self, symbol: str, current_price: float) -> Optional[Dict[str, Any]]:
-        """New 6가지 Exit 방식 종합 Confirm (우선순위 적용)"""
+        """모든 청산 조건을 동시 체크하여 가장 적절한 신호 반환 (OR 로직)"""
         try:
             if symbol not in self.positions:
                 return None
@@ -4324,37 +4324,119 @@ class ImprovedDCAPositionManager:
             if not position.is_active:
                 return None
 
-            # 1순위: SuperTrend 전량Exit (Profit ratio 조건 + SuperTrend 시그널)
+            # 현재 수익률 계산
+            current_profit_pct = (current_price - position.average_price) / position.average_price
+
+            # 🔍 모든 청산 조건을 동시에 체크
+            exit_signals = []
+
+            # 1. 손절 체크
+            stop_loss_signal = self._check_stop_loss_trigger(position, current_price, current_profit_pct)
+            if stop_loss_signal and stop_loss_signal.get('trigger_activated'):
+                exit_signals.append({
+                    'priority': 0,  # 최고 우선순위
+                    'exit_type': 'stop_loss_exit',
+                    'exit_ratio': 1.0,
+                    'current_profit_pct': current_profit_pct * 100,
+                    'trigger_info': f"손절 실행 (수익률: {current_profit_pct*100:.2f}%)",
+                    'signal_strength': 'CRITICAL'
+                })
+
+            # 2. SuperTrend 전량Exit 체크
             supertrend_exit = self.check_supertrend_exit_signal(symbol, current_price, position)
             if supertrend_exit:
-                return supertrend_exit
+                exit_signals.append({
+                    'priority': 1,
+                    'exit_type': supertrend_exit['exit_type'],
+                    'exit_ratio': supertrend_exit['exit_ratio'],
+                    'current_profit_pct': supertrend_exit.get('current_profit_pct', current_profit_pct * 100),
+                    'trigger_info': supertrend_exit.get('trigger_info', 'SuperTrend 청산'),
+                    'signal_strength': 'HIGH'
+                })
 
-            # 2순위: 15분봉 BB/MA 피크 전량익절 (최대 수익 포착)
-            peak_profit_exit = self.check_peak_profit_exit_signal(symbol, current_price, position)
-            if peak_profit_exit:
-                return peak_profit_exit
+            # 3. 15분봉 BB/MA 피크 전량익절 체크
+            try:
+                peak_profit_exit = self.check_peak_profit_exit_signal(symbol, current_price, position)
+                if peak_profit_exit:
+                    exit_signals.append({
+                        'priority': 2,
+                        'exit_type': peak_profit_exit['exit_type'],
+                        'exit_ratio': peak_profit_exit['exit_ratio'],
+                        'current_profit_pct': peak_profit_exit.get('current_profit_pct', current_profit_pct * 100),
+                        'trigger_info': peak_profit_exit.get('trigger_info', '피크 수익 청산'),
+                        'signal_strength': 'HIGH'
+                    })
+            except Exception:
+                pass  # 함수가 없으면 건너뛰기
 
-            # 3순위: BB600 50% 익절 (10% 이상에서 우선 Execute)
+            # 4. BB600 50% 익절 체크
             bb600_exit = self.check_bb600_exit_signal(symbol, current_price, position)
             if bb600_exit:
-                return bb600_exit
+                exit_signals.append({
+                    'priority': 3,
+                    'exit_type': bb600_exit['exit_type'],
+                    'exit_ratio': bb600_exit['exit_ratio'],
+                    'current_profit_pct': bb600_exit.get('current_profit_pct', current_profit_pct * 100),
+                    'trigger_info': bb600_exit.get('trigger_info', 'BB600 익절'),
+                    'signal_strength': 'MEDIUM'
+                })
 
-            # 4순위: Approx상승후 급락 리스크 times피 (New 5번째 Exit)
-            weak_rise_dump_exit = self.check_weak_rise_dump_protection_exit(symbol, current_price, position)
-            if weak_rise_dump_exit:
-                return weak_rise_dump_exit
+            # 5. 약상승후 급락 리스크 회피 체크
+            try:
+                weak_rise_dump_exit = self.check_weak_rise_dump_protection_exit(symbol, current_price, position)
+                if weak_rise_dump_exit:
+                    exit_signals.append({
+                        'priority': 4,
+                        'exit_type': weak_rise_dump_exit['exit_type'],
+                        'exit_ratio': weak_rise_dump_exit['exit_ratio'],
+                        'current_profit_pct': weak_rise_dump_exit.get('current_profit_pct', current_profit_pct * 100),
+                        'trigger_info': weak_rise_dump_exit.get('trigger_info', '급락 리스크 회피'),
+                        'signal_strength': 'MEDIUM'
+                    })
+            except Exception:
+                pass
 
-            # 5순위: 본절보호Exit (Trailing 스톱, 절반하락 보호, Approx수익 보호)
-            breakeven_exit = self.check_breakeven_protection_exit(symbol, current_price, position)
-            if breakeven_exit:
-                return breakeven_exit
+            # 6. 본절보호 Exit 체크
+            try:
+                breakeven_exit = self.check_breakeven_protection_exit(symbol, current_price, position)
+                if breakeven_exit:
+                    exit_signals.append({
+                        'priority': 5,
+                        'exit_type': breakeven_exit['exit_type'],
+                        'exit_ratio': breakeven_exit['exit_ratio'],
+                        'current_profit_pct': breakeven_exit.get('current_profit_pct', current_profit_pct * 100),
+                        'trigger_info': breakeven_exit.get('trigger_info', '본절 보호'),
+                        'signal_strength': 'LOW'
+                    })
+            except Exception:
+                pass
 
-            # 6순위: DCA Cyclic trading 일부Exit은 Legacy 시스템 Maintain
+            # 📊 신호가 있으면 우선순위가 높은 것부터 반환
+            if exit_signals:
+                # 우선순위 정렬 (낮은 숫자 = 높은 우선순위)
+                exit_signals.sort(key=lambda x: x['priority'])
+                
+                # 가장 우선순위가 높은 신호 반환
+                best_signal = exit_signals[0]
+                
+                # 디버그: 다중 신호 감지 시 로깅
+                if len(exit_signals) > 1:
+                    signal_types = [s['exit_type'] for s in exit_signals]
+                    self.logger.info(f"🔍 다중 청산 신호 감지 ({symbol}): {', '.join(signal_types)} - 선택: {best_signal['exit_type']}")
+                
+                return {
+                    'exit_type': best_signal['exit_type'],
+                    'exit_ratio': best_signal['exit_ratio'],
+                    'current_profit_pct': best_signal['current_profit_pct'],
+                    'trigger_info': best_signal['trigger_info'],
+                    'signal_strength': best_signal['signal_strength'],
+                    'total_signals_detected': len(exit_signals)
+                }
 
             return None
 
         except Exception as e:
-            self.logger.error(f"New Exit Confirmation failed {symbol}: {e}")
+            self.logger.error(f"청산 신호 종합 체크 실패 {symbol}: {e}")
             return None
     
     def check_new_exit_conditions(self, symbol: str, current_price: float) -> bool:
