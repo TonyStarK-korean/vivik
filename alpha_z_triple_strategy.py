@@ -6,11 +6,11 @@ A전략(3분봉 바닥급등타점) + B전략(15분봉 급등초입) + C전략(3
 거래 설정:
 - 레버리지: 10배
 - 초기 진입: 원금 1.0% x 10배 레버리지 (10% 노출)
-- 최대 진입 종목: 10종목
+- 최대 진입 종목: 15종목
 - 재진입: 순환매 활성화 (최대 3회 순환매)
 - 손절: 평균가 대비 -10% 전량 손절 (단계별 갱신)
 - 종목당 최대 비중: 2.0% (초기 1.0% + 불타기 최대 1.0%)
-- 최대 원금 사용: 20% (10종목 × 2.0%)
+- 최대 원금 사용: 30% (15종목 × 2.0%)
 
 불타기 시스템 (상승 눌림목 추가 진입):
 - 1차 불타기: +1.5% 상승 후 -0.8%~-1.2% 눌림 시 +0.5% 추가
@@ -234,7 +234,8 @@ class FifteenMinuteMegaStrategy:
             self.dca_manager.config['initial_leverage'] = 10.0
             self.dca_manager.config['first_dca_leverage'] = 10.0
             self.dca_manager.config['second_dca_leverage'] = 10.0
-            print("[INFO] DCA 매니저 초기화 완료 - 레버리지 10배 적용")
+            self.dca_manager.config['max_total_positions'] = 15
+            print("[INFO] DCA 매니저 초기화 완료 - 레버리지 10배, 최대 15종목 적용")
         else:
             self.dca_manager = None
             print("[WARN] DCA 매니저 없음 - 프라이빗 API 필요")
@@ -2978,10 +2979,10 @@ class FifteenMinuteMegaStrategy:
                 print(f"   ⚠️ strategy_details가 없습니다!")
                 print(f"   signal_data keys: {signal_data.keys()}")
             
-            # 포지션 개수 제한 체크 (최대 10개)
+            # 포지션 개수 제한 체크 (최대 15개)
             portfolio = self.get_portfolio_summary()
-            if portfolio['open_positions'] >= 10:
-                print(f"⚠️ 최대 포지션 개수 도달 (10개) - {clean_symbol} 진입 건너뛰기")
+            if portfolio['open_positions'] >= 15:
+                print(f"⚠️ 최대 포지션 개수 도달 (15개) - {clean_symbol} 진입 건너뛰기")
                 return False
             
             # 중복 포지션 체크
