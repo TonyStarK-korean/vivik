@@ -35,7 +35,7 @@ A전략(3분봉 바닥급등타점) + B전략(15분봉 급등초입) + C전략(3
 
 전략 조건:
 A전략(3분봉 바닥급등타점): 5개 조건
-  - 조건1: 200봉이내 MA80-MA480 골든크로스
+  - 조건1: 200봉이내 MA80-MA480 골든크로스 AND 현재 MA80>MA480
   - 조건2: 200봉이내 BB80-BB480 골든크로스
   - 조건3: 20봉이내 (저가<BB80하한 or MA5<BB80하한)
   - 조건4: 종가<MA5 and MA80<MA5
@@ -1222,11 +1222,14 @@ class FifteenMinuteMegaStrategy:
             except Exception as e:
                 return False, [f"[A전략] 3분봉 데이터 조회 실패: {e}"]
             
-            # 조건 1: 200봉이내 MA80-MA480 골든크로스
+            # 조건 1: 200봉이내 MA80-MA480 골든크로스 AND 현재 MA80>MA480
             condition1 = False
             condition1_detail = "골든크로스 없음"
 
             try:
+                golden_cross_found = False
+                golden_cross_candles_ago = 0
+
                 # 200봉이내 골든크로스 체크
                 if len(df_calc) >= 201:
                     for i in range(1, min(201, len(df_calc))):
@@ -1247,11 +1250,24 @@ class FifteenMinuteMegaStrategy:
                             ma480_prev > 0 and ma480_curr > 0 and  # MA480이 0보다 큰 값
                             abs(ma480_prev - ma480_curr) < ma480_curr * 0.1 and  # 급격한 변화 제외
                             ma80_prev <= ma480_prev and ma80_curr > ma480_curr):
-                            condition1 = True
-                            condition1_detail = f"{i}봉전 MA80-MA480 골든크로스"
+                            golden_cross_found = True
+                            golden_cross_candles_ago = i
                             break
 
-                conditions.append(f"[A전략 조건1] 200봉이내 MA80-MA480 골든크로스 ({condition1_detail}): {condition1}")
+                # 골든크로스가 있으면 현재 MA80 > MA480 체크
+                if golden_cross_found:
+                    current_ma80 = df_calc['ma80'].iloc[-1]
+                    current_ma480 = df_calc['ma480'].iloc[-1]
+
+                    if pd.notna(current_ma80) and pd.notna(current_ma480) and current_ma80 > current_ma480:
+                        condition1 = True
+                        condition1_detail = f"{golden_cross_candles_ago}봉전 골든크로스 & 현재 MA80>MA480"
+                    else:
+                        condition1_detail = f"{golden_cross_candles_ago}봉전 골든크로스 있으나 현재 MA80<=MA480"
+                else:
+                    condition1_detail = "골든크로스 없음"
+
+                conditions.append(f"[A전략 조건1] 200봉이내 MA80-MA480 골든크로스 AND 현재 MA80>MA480 ({condition1_detail}): {condition1}")
             except Exception as e:
                 conditions.append(f"[A전략 조건1] MA80-MA480 골든크로스 계산 실패: {e}")
                 condition1 = False
