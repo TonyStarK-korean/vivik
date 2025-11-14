@@ -40,7 +40,7 @@ A전략(3분봉 바닥급등타점): 5개 조건
   - 조건3: 10봉이내 (저가<BB80하한 or MA5<BB80하한)
   - 조건4: 종가<MA5
   - 조건5: 10봉이내 MA5-MA20 골든크로스 and MA20<MA80
-B전략(15분봉 급등초입): 6개 조건 - 200봉이내 MA80-MA480 골든크로스 + BB골든크로스 + MA5-MA20골든크로스 + BB200상단-MA480 상향돌파 + MA20-MA80 데드크로스 or 이격도조건 + 시가대비고가 3%이상
+B전략(15분봉 급등초입): 4개 조건 - 200봉이내 MA80-MA480 골든크로스 + BB골든크로스 + (바닥권진입 OR 추세전환)
 C전략(30분봉 급등맥점): 2개 기본조건 + 3개 타점(A/B/C) - 기본조건(50봉이내 MA80-MA480 골든크로스 or MA80<MA480 + 100봉이내 MA480-BB200 크로스) + A/B/C 타점 중 1개
 """
 
@@ -433,7 +433,7 @@ class FifteenMinuteMegaStrategy:
                 
                 # 전략별 진입확률 계산
                 a_entry_probability = (a_passed / 5.0) * 100 if a_passed > 0 else 0  # A전략: 5개 조건
-                b_entry_probability = (b_passed / 6.0) * 100 if b_passed > 0 else 0  # B전략: 6개 조건
+                b_entry_probability = (b_passed / 4.0) * 100 if b_passed > 0 else 0  # B전략: 4개 조건
                 c_entry_probability = (c_passed / 4.0) * 100 if c_passed > 0 else 0  # C전략: 4개 조건
                 
                 a_result_data = {'symbol': clean_symbol, 'price': price, 'prob': a_entry_probability}
@@ -465,12 +465,12 @@ class FifteenMinuteMegaStrategy:
                 elif a_passed >= 0:  # 1개 이상 미충족 (0개 포함)
                     a_watchlist.append(a_result_data)
                 
-                # B전략 분류 (6개 조건 기준)
+                # B전략 분류 (4개 조건 기준)
                 if details['strategy_b']['signal']:
                     b_entry_signals.append(b_result_data)
-                elif b_passed == 5:  # 1개만 미충족
+                elif b_passed == 3:  # 1개만 미충족
                     b_near_entry.append(b_result_data)
-                elif b_passed == 4:  # 2개 미충족
+                elif b_passed == 2:  # 2개 미충족
                     b_potential_entry.append(b_result_data)
                 elif b_passed >= 0:  # 1개 이상 미충족 (0개 포함)
                     b_watchlist.append(b_result_data)
@@ -1021,13 +1021,12 @@ class FifteenMinuteMegaStrategy:
         - 5봉이내 1봉전 종가<MA5 골든크로스 AND
         - (3분봉상 or 15분봉상) 20봉이내 시가대비고가 3%이상 1회이상
 
-        B전략: 15분봉 급등초입 (6개 조건)
-        - 200봉 이내 MA80-MA480 골든크로스 AND
-        - BB 골든크로스 AND
-        - 10봉 이내 1봉전 MA5-MA20 골든크로스 AND (현재가<ma5 or 현재가-ma5 이격도 0.5%이내) AND
-        - 250봉이내 BB200상단-MA480 상향돌파 AND
-        - 40봉이내 데드크로스/이격도/시가대비고가 조건 AND
-        - 200봉이내 시가대비고가 3%이상 1회이상
+        B전략: 15분봉 급등초입 (4개 조건)
+        - 조건1: 200봉이내 MA80-MA480 골든크로스 AND 이격도 1%이상
+        - 조건2: 100봉이내 BB80상단-BB480상단 골든크로스
+        - 조건4 OR 조건5:
+          * 조건4(바닥권 진입): MA20-MA80 데드크로스 AND 저가/MA5-BB80접근 AND RSI과매도
+          * 조건5(추세전환): MA5-MA80 이격도 2%이내 AND MA5-MA20 골든크로스
 
         C전략: 30분봉 급등맥점 (기본조건 2개 + 타점 3개 중 1개)
         - 기본조건1: 50봉이내 MA80-MA480 골든크로스 OR 현재봉 MA80<MA480
@@ -2513,9 +2512,9 @@ class FifteenMinuteMegaStrategy:
                         elif '조건5' in condition:
                             failed_conditions.append("B전략-조건5")
                 
-                # 전략별 상태 분류 (A전략: 5개 조건, B전략: 6개 조건)
+                # 전략별 상태 분류 (A전략: 5개 조건, B전략: 4개 조건)
                 a_failed_count = 5 - a_passed
-                b_failed_count = 6 - b_passed
+                b_failed_count = 4 - b_passed
                 
                 # CRITICAL: is_signal=False인 경우 절대 entry_signal이 될 수 없음 (최적화 버전)
                 # A전략과 B전략 중 더 좋은 상태를 기준으로 분류 (하지만 is_signal=False이므로 entry_signal 제외)
@@ -2744,9 +2743,9 @@ class FifteenMinuteMegaStrategy:
                         elif '조건5' in condition:
                             failed_conditions.append("B전략-조건5")
                 
-                # 전략별 상태 분류 (A전략: 5개 조건, B전략: 6개 조건)
+                # 전략별 상태 분류 (A전략: 5개 조건, B전략: 4개 조건)
                 a_failed_count = 5 - a_passed
-                b_failed_count = 6 - b_passed
+                b_failed_count = 4 - b_passed
                 
                 # CRITICAL: is_signal=False인 경우 절대 entry_signal이 될 수 없음
                 # A전략과 B전략 중 더 좋은 상태를 기준으로 분류 (하지만 is_signal=False이므로 entry_signal 제외)
