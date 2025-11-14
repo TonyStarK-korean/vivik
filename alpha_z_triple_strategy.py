@@ -1362,23 +1362,31 @@ class FifteenMinuteMegaStrategy:
                 conditions.append(f"[A전략 조건4] 종가<MA5 계산 실패: {e}")
                 condition4 = False
             
-            # 조건 5: RSI 30 이하
+            # 조건 5: 5봉이내 RSI 30 이하
             condition5 = False
             condition5_detail = "미충족"
-            
+
             try:
-                current_rsi = df_calc.get('rsi', pd.Series()).iloc[-1] if 'rsi' in df_calc.columns else None
-                
-                if pd.notna(current_rsi):
-                    if current_rsi <= 30.0:
-                        condition5 = True
-                        condition5_detail = f"RSI={current_rsi:.2f} (30 이하)"
-                    else:
-                        condition5_detail = f"RSI={current_rsi:.2f} (30 초과)"
+                rsi_series = df_calc.get('rsi', pd.Series()) if 'rsi' in df_calc.columns else pd.Series()
+
+                if len(rsi_series) >= 5:
+                    # 최근 5봉 검사
+                    for i in range(min(5, len(rsi_series))):
+                        idx = -(i+1)
+                        rsi_value = rsi_series.iloc[idx]
+
+                        if pd.notna(rsi_value) and rsi_value <= 30.0:
+                            condition5 = True
+                            condition5_detail = f"{i+1}봉전 RSI={rsi_value:.2f} (30 이하)"
+                            break
+
+                    if not condition5:
+                        recent_rsi = rsi_series.iloc[-1]
+                        condition5_detail = f"최근5봉 RSI 모두 30 초과 (현재={recent_rsi:.2f})" if pd.notna(recent_rsi) else "RSI 계산 실패"
                 else:
-                    condition5_detail = "RSI 계산 실패"
-                
-                conditions.append(f"[A전략 조건5] RSI 30 이하 ({condition5_detail}): {condition5}")
+                    condition5_detail = "RSI 데이터 부족"
+
+                conditions.append(f"[A전략 조건5] 5봉이내 RSI 30 이하 ({condition5_detail}): {condition5}")
             except Exception as e:
                 conditions.append(f"[A전략 조건5] RSI 계산 실패: {e}")
                 condition5 = False
@@ -1481,114 +1489,176 @@ class FifteenMinuteMegaStrategy:
             except Exception as e:
                 conditions.append(f"[B전략 조건2] BB골든크로스 계산 실패: {e}")
                 condition2 = False
-            
-            # 조건 3: 10봉이내 저가<BB80하한선 or MA5-BB80하한선 이격도 1%이내
-            condition3 = False
-            condition3_detail = "미충족"
-            
-            try:
-                bb80_lower = df_calc.get('bb80_lower', pd.Series())
-                
-                if len(bb80_lower) >= 11 and len(df_calc) >= 11:
-                    for i in range(min(10, len(df_calc))):
-                        idx = -(i+1)
-                        
-                        if abs(idx) > len(df_calc):
-                            break
-                        
-                        low_price = df_calc['low'].iloc[idx]
-                        ma5_value = df_calc['ma5'].iloc[idx]
-                        bb80_lower_value = bb80_lower.iloc[idx]
-                        
-                        # 저가 < BB80하한선
-                        if pd.notna(low_price) and pd.notna(bb80_lower_value) and bb80_lower_value > 0:
-                            if low_price < bb80_lower_value:
-                                condition3 = True
-                                condition3_detail = f"{i+1}봉전 저가<BB80하한선"
-                                break
-                        
-                        # MA5-BB80하한선 이격도 1%이내
-                        if pd.notna(ma5_value) and pd.notna(bb80_lower_value) and bb80_lower_value > 0:
-                            gap_pct = abs((ma5_value - bb80_lower_value) / bb80_lower_value) * 100
-                            if gap_pct <= 1.0:
-                                condition3 = True
-                                condition3_detail = f"{i+1}봉전 MA5-BB80하한선 이격도 {gap_pct:.2f}%"
-                                break
-                
-                conditions.append(f"[B전략 조건3] 10봉이내 저가<BB80하한선 OR MA5-BB80하한선 이격도 1%이내 ({condition3_detail}): {condition3}")
-            except Exception as e:
-                conditions.append(f"[B전략 조건3] 저가/MA5-BB80하한선 조건 계산 실패: {e}")
-                condition3 = False
-            
-            # 조건 4: MA20-MA80 데드크로스 or 이격도조건
+
+            # 조건 3: 삭제 (BB80-BB200 데드크로스 조건 제거)
+
+            # 조건 4: (MA20-MA80 데드크로스 AND 저가/MA5-BB80하한 접근 AND RSI 과매도)
+            # 3개 하위조건 모두 충족해야 True
             condition4 = False
+            condition4_sub1 = False  # MA20-MA80 데드크로스
+            condition4_sub2 = False  # 저가/MA5-BB80하한 접근
+            condition4_sub3 = False  # RSI 과매도
             condition4_detail = "미충족"
-            
+
             try:
-                # MA20-MA80 데드크로스 체크 (최근 30봉 이내)
-                deadcross_found = False
+                # 하위조건 1: 30봉 이내 MA20-MA80 데드크로스
                 if len(df_calc) >= 31:
                     for i in range(min(30, len(df_calc) - 1)):
                         curr_idx = -(i+1)
                         prev_idx = -(i+2)
-                        
+
                         if abs(prev_idx) > len(df_calc):
                             break
-                            
+
                         ma20_prev = df_calc['ma20'].iloc[prev_idx]
                         ma20_curr = df_calc['ma20'].iloc[curr_idx]
                         ma80_prev = df_calc['ma80'].iloc[prev_idx]
                         ma80_curr = df_calc['ma80'].iloc[curr_idx]
-                        
+
                         if (pd.notna(ma20_prev) and pd.notna(ma20_curr) and
                             pd.notna(ma80_prev) and pd.notna(ma80_curr) and
                             ma20_prev >= ma80_prev and ma20_curr < ma80_curr):
-                            deadcross_found = True
-                            condition4 = True
-                            condition4_detail = f"{i+1}봉전 MA20-MA80 데드크로스"
+                            condition4_sub1 = True
+                            condition4_sub1_detail = f"{i+1}봉전 MA20-MA80 데드크로스"
                             break
-                
-                # 데드크로스가 없으면 이격도조건 체크
-                if not deadcross_found:
-                    current_ma20 = df_calc['ma20'].iloc[-1]
-                    current_ma80 = df_calc['ma80'].iloc[-1]
-                    
-                    if pd.notna(current_ma20) and pd.notna(current_ma80) and current_ma80 > 0:
-                        gap_pct = ((current_ma20 - current_ma80) / current_ma80) * 100
-                        if gap_pct <= 5.0:  # 이격도 5% 이내
-                            condition4 = True
-                            condition4_detail = f"MA20-MA80 이격도 {gap_pct:.2f}% (5% 이내)"
-                        else:
-                            condition4_detail = f"MA20-MA80 이격도 {gap_pct:.2f}% (5% 초과)"
-                            
-                conditions.append(f"[B전략 조건4] MA20-MA80 데드크로스/이격도 ({condition4_detail}): {condition4}")
-            except Exception as e:
-                conditions.append(f"[B전략 조건4] MA20-MA80 데드크로스/이격도 계산 실패: {e}")
-                condition4 = False
-            
-            # 조건 5: RSI 30 이하
-            condition5 = False
-            condition5_detail = "미충족"
-            
-            try:
-                current_rsi = df_calc.get('rsi', pd.Series()).iloc[-1] if 'rsi' in df_calc.columns else None
-                
-                if pd.notna(current_rsi):
-                    if current_rsi <= 30.0:
-                        condition5 = True
-                        condition5_detail = f"RSI={current_rsi:.2f} (30 이하)"
-                    else:
-                        condition5_detail = f"RSI={current_rsi:.2f} (30 초과)"
+
+                if not condition4_sub1:
+                    condition4_sub1_detail = "30봉이내 MA20-MA80 데드크로스 없음"
+
+                # 하위조건 2: 10봉 이내 (저가<BB80하한 OR MA5-BB80하한 이격도 <=1%)
+                bb80_lower = df_calc.get('bb80_lower', pd.Series())
+
+                if len(bb80_lower) >= 11 and len(df_calc) >= 11:
+                    for i in range(min(10, len(df_calc))):
+                        idx = -(i+1)
+
+                        if abs(idx) > len(df_calc):
+                            break
+
+                        low_price = df_calc['low'].iloc[idx]
+                        ma5_value = df_calc['ma5'].iloc[idx]
+                        bb80_lower_value = bb80_lower.iloc[idx]
+
+                        # 저가 < BB80하한선
+                        if pd.notna(low_price) and pd.notna(bb80_lower_value) and bb80_lower_value > 0:
+                            if low_price < bb80_lower_value:
+                                condition4_sub2 = True
+                                condition4_sub2_detail = f"{i+1}봉전 저가<BB80하한선"
+                                break
+
+                        # MA5-BB80하한선 이격도 1%이내
+                        if pd.notna(ma5_value) and pd.notna(bb80_lower_value) and bb80_lower_value > 0:
+                            gap_pct = abs((ma5_value - bb80_lower_value) / bb80_lower_value) * 100
+                            if gap_pct <= 1.0:
+                                condition4_sub2 = True
+                                condition4_sub2_detail = f"{i+1}봉전 MA5-BB80하한선 이격도 {gap_pct:.2f}%"
+                                break
+
+                if not condition4_sub2:
+                    condition4_sub2_detail = "10봉이내 저가/MA5-BB80하한 접근 조건 미충족"
+
+                # 하위조건 3: 5봉 이내 RSI <= 30
+                rsi_series = df_calc.get('rsi', pd.Series()) if 'rsi' in df_calc.columns else pd.Series()
+
+                if len(rsi_series) >= 5:
+                    for i in range(min(5, len(rsi_series))):
+                        idx = -(i+1)
+                        rsi_value = rsi_series.iloc[idx]
+
+                        if pd.notna(rsi_value) and rsi_value <= 30.0:
+                            condition4_sub3 = True
+                            condition4_sub3_detail = f"{i+1}봉전 RSI={rsi_value:.2f}"
+                            break
+
+                if not condition4_sub3:
+                    condition4_sub3_detail = "5봉이내 RSI 30 이하 없음"
+
+                # 조건4 최종 판정: 3개 하위조건 모두 True여야 함
+                condition4 = condition4_sub1 and condition4_sub2 and condition4_sub3
+
+                if condition4:
+                    condition4_detail = f"충족 ({condition4_sub1_detail} & {condition4_sub2_detail} & {condition4_sub3_detail})"
                 else:
-                    condition5_detail = "RSI 계산 실패"
-                
-                conditions.append(f"[B전략 조건5] RSI 30 이하 ({condition5_detail}): {condition5}")
+                    failed_parts = []
+                    if not condition4_sub1:
+                        failed_parts.append(condition4_sub1_detail)
+                    if not condition4_sub2:
+                        failed_parts.append(condition4_sub2_detail)
+                    if not condition4_sub3:
+                        failed_parts.append(condition4_sub3_detail)
+                    condition4_detail = " / ".join(failed_parts)
+
+                conditions.append(f"[B전략 조건4] MA20-MA80 DC & 저가/MA5-BB80 & RSI ({condition4_detail}): {condition4}")
             except Exception as e:
-                conditions.append(f"[B전략 조건5] RSI 계산 실패: {e}")
+                conditions.append(f"[B전략 조건4] 계산 실패: {e}")
+                condition4 = False
+
+            # 조건 5: (MA5-MA80 이격도 2%이내 AND 10봉이내 MA5-MA20 골든크로스)
+            # 2개 하위조건 모두 충족해야 True
+            condition5 = False
+            condition5_sub1 = False  # MA5-MA80 이격도 2% 이내
+            condition5_sub2 = False  # 10봉이내 MA5-MA20 골든크로스
+            condition5_detail = "미충족"
+
+            try:
+                # 하위조건 1: MA5-MA80 이격도 2% 이내
+                current_ma5 = df_calc['ma5'].iloc[-1]
+                current_ma80 = df_calc['ma80'].iloc[-1]
+
+                if pd.notna(current_ma5) and pd.notna(current_ma80) and current_ma80 > 0:
+                    gap_pct = abs((current_ma5 - current_ma80) / current_ma80) * 100
+                    if gap_pct <= 2.0:
+                        condition5_sub1 = True
+                        condition5_sub1_detail = f"MA5-MA80 이격도 {gap_pct:.2f}%"
+                    else:
+                        condition5_sub1_detail = f"MA5-MA80 이격도 {gap_pct:.2f}% (2% 초과)"
+                else:
+                    condition5_sub1_detail = "MA5/MA80 데이터 부족"
+
+                # 하위조건 2: 10봉 이내 MA5-MA20 골든크로스
+                if len(df_calc) >= 11:
+                    for i in range(min(10, len(df_calc) - 1)):
+                        curr_idx = -(i+1)
+                        prev_idx = -(i+2)
+
+                        if abs(prev_idx) > len(df_calc):
+                            break
+
+                        ma5_prev = df_calc['ma5'].iloc[prev_idx]
+                        ma5_curr = df_calc['ma5'].iloc[curr_idx]
+                        ma20_prev = df_calc['ma20'].iloc[prev_idx]
+                        ma20_curr = df_calc['ma20'].iloc[curr_idx]
+
+                        if (pd.notna(ma5_prev) and pd.notna(ma5_curr) and
+                            pd.notna(ma20_prev) and pd.notna(ma20_curr) and
+                            ma5_prev <= ma20_prev and ma5_curr > ma20_curr):
+                            condition5_sub2 = True
+                            condition5_sub2_detail = f"{i+1}봉전 MA5-MA20 골든크로스"
+                            break
+
+                if not condition5_sub2:
+                    condition5_sub2_detail = "10봉이내 MA5-MA20 골든크로스 없음"
+
+                # 조건5 최종 판정: 2개 하위조건 모두 True여야 함
+                condition5 = condition5_sub1 and condition5_sub2
+
+                if condition5:
+                    condition5_detail = f"충족 ({condition5_sub1_detail} & {condition5_sub2_detail})"
+                else:
+                    failed_parts = []
+                    if not condition5_sub1:
+                        failed_parts.append(condition5_sub1_detail)
+                    if not condition5_sub2:
+                        failed_parts.append(condition5_sub2_detail)
+                    condition5_detail = " / ".join(failed_parts)
+
+                conditions.append(f"[B전략 조건5] MA5-MA80 이격도 & MA5-MA20 GC ({condition5_detail}): {condition5}")
+            except Exception as e:
+                conditions.append(f"[B전략 조건5] 계산 실패: {e}")
                 condition5 = False
-            
-            # B전략 최종 신호 판정: 모든 조건이 True여야 함 (5개 조건)
-            strategy_b_signal = condition1 and condition2 and condition3 and condition4 and condition5
+
+            # B전략 최종 신호 판정: C1 AND C2 AND (C4 OR C5)
+            strategy_b_signal = condition1 and condition2 and (condition4 or condition5)
             
             return strategy_b_signal, conditions
             
@@ -1835,78 +1905,17 @@ class FifteenMinuteMegaStrategy:
                 entry_b = False
 
             # C타점: 30봉이내 (MA5-MA80 OR MA20-MA80) 데드크로스 AND MA5<MA80 AND 5봉이내 MA5-MA20 골든크로스 AND 현재가<MA20
+            # ⚠️ 사용자 요청으로 C타점 비활성화
             entry_c = False
-            entry_c_detail = "미충족"
+            entry_c_detail = "비활성화 (사용자 요청)"
+            conditions.append(f"[C전략 C타점] {entry_c_detail}: {entry_c}")
 
-            try:
-                # 30봉이내 MA5-MA80 또는 MA20-MA80 데드크로스 체크
-                dead_cross_found = False
-                if len(df_calc) >= 31:
-                    for i in range(min(30, len(df_calc) - 1)):
-                        curr_idx = -(i+1)
-                        prev_idx = -(i+2)
-
-                        if abs(prev_idx) > len(df_calc):
-                            break
-
-                        ma5_prev = df_calc['ma5'].iloc[prev_idx]
-                        ma5_curr = df_calc['ma5'].iloc[curr_idx]
-                        ma20_prev = df_calc['ma20'].iloc[prev_idx]
-                        ma20_curr = df_calc['ma20'].iloc[curr_idx]
-                        ma80_prev = df_calc['ma80'].iloc[prev_idx]
-                        ma80_curr = df_calc['ma80'].iloc[curr_idx]
-
-                        # MA5-MA80 데드크로스
-                        if (pd.notna(ma5_prev) and pd.notna(ma5_curr) and
-                            pd.notna(ma80_prev) and pd.notna(ma80_curr) and
-                            ma5_prev >= ma80_prev and ma5_curr < ma80_curr):
-                            dead_cross_found = True
-                            break
-
-                        # MA20-MA80 데드크로스
-                        if (pd.notna(ma20_prev) and pd.notna(ma20_curr) and
-                            pd.notna(ma80_prev) and pd.notna(ma80_curr) and
-                            ma20_prev >= ma80_prev and ma20_curr < ma80_curr):
-                            dead_cross_found = True
-                            break
-
-                # MA5<MA80 체크
-                current_ma5 = df_calc['ma5'].iloc[-1]
-                current_ma80 = df_calc['ma80'].iloc[-1]
-                ma5_below_ma80 = pd.notna(current_ma5) and pd.notna(current_ma80) and current_ma5 < current_ma80
-
-                # 5봉이내 MA5-MA20 골든크로스 체크
-                ma5_cross_ma20 = False
-                if len(df_calc) >= 6:
-                    for i in range(min(5, len(df_calc) - 1)):
-                        curr_idx = -(i+1)
-                        prev_idx = -(i+2)
-
-                        if abs(prev_idx) > len(df_calc):
-                            break
-
-                        ma5_prev = df_calc['ma5'].iloc[prev_idx]
-                        ma5_curr = df_calc['ma5'].iloc[curr_idx]
-                        ma20_prev = df_calc['ma20'].iloc[prev_idx]
-                        ma20_curr = df_calc['ma20'].iloc[curr_idx]
-
-                        if (pd.notna(ma5_prev) and pd.notna(ma5_curr) and
-                            pd.notna(ma20_prev) and pd.notna(ma20_curr) and
-                            ma5_prev <= ma20_prev and ma5_curr > ma20_curr):
-                            ma5_cross_ma20 = True
-                            break
-
-                # 현재가<MA20 체크
-                current_price = df_calc['close'].iloc[-1]
-                current_ma20 = df_calc['ma20'].iloc[-1]
-                price_below_ma20 = pd.notna(current_price) and pd.notna(current_ma20) and current_price < current_ma20
-
-                entry_c = dead_cross_found and ma5_below_ma80 and ma5_cross_ma20 and price_below_ma20
-                entry_c_detail = f"데드크로스={dead_cross_found}, MA5<MA80={ma5_below_ma80}, MA5골든MA20={ma5_cross_ma20}, 현재가<MA20={price_below_ma20}"
-                conditions.append(f"[C전략 C타점] {entry_c_detail}: {entry_c}")
-            except Exception as e:
-                conditions.append(f"[C전략 C타점] 계산 실패: {e}")
-                entry_c = False
+            # 원래 C타점 로직은 주석 처리됨
+            # try:
+            #     dead_cross_found = False
+            #     ...
+            # except Exception as e:
+            #     entry_c = False
 
             # C전략 최종 신호 판정: 기본조건 충족 AND (A타점 OR B타점 OR C타점)
             strategy_d_signal = (base_condition1 and base_condition2) and (entry_a or entry_b or entry_c)
