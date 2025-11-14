@@ -35,12 +35,12 @@ A전략(3분봉 바닥급등타점) + B전략(15분봉 급등초입) + C전략(3
 
 전략 조건:
 A전략(3분봉 바닥급등타점): 5개 조건
-  - 조건1: 200봉이내 MA80-MA480 골든크로스 AND 현재 MA80>MA480
-  - 조건2: 200봉이내 BB80-BB480 골든크로스
+  - 조건1: 500봉이내 MA80-MA480 골든크로스 AND 현재 MA80>MA480
+  - 조건2: 500봉이내 BB80-BB480 골든크로스
   - 조건3: 20봉이내 (저가<BB80하한 or MA5<BB80하한)
   - 조건4: 종가<MA5 and MA80<MA5
   - 조건5: 5봉이내 RSI 30 이하
-B전략(15분봉 급등초입): 4개 조건 - 200봉이내 MA80-MA480 골든크로스 + BB골든크로스 + (바닥권진입 OR 추세전환)
+B전략(15분봉 급등초입): 4개 조건 - 500봉이내 MA80-MA480 골든크로스 + 300봉이내 BB골든크로스 + (바닥권진입 OR 추세전환)
 C전략(30분봉 급등맥점): 2개 기본조건 + 3개 타점(A/B/C) - 기본조건(50봉이내 MA80-MA480 골든크로스 or MA80<MA480 + 100봉이내 MA480-BB200 크로스) + A/B/C 타점 중 1개
 """
 
@@ -1222,7 +1222,7 @@ class FifteenMinuteMegaStrategy:
             except Exception as e:
                 return False, [f"[A전략] 3분봉 데이터 조회 실패: {e}"]
             
-            # 조건 1: 200봉이내 MA80-MA480 골든크로스 AND 현재 MA80>MA480
+            # 조건 1: 500봉이내 MA80-MA480 골든크로스 AND 현재 MA80>MA480
             condition1 = False
             condition1_detail = "골든크로스 없음"
 
@@ -1230,9 +1230,9 @@ class FifteenMinuteMegaStrategy:
                 golden_cross_found = False
                 golden_cross_candles_ago = 0
 
-                # 200봉이내 골든크로스 체크
-                if len(df_calc) >= 201:
-                    for i in range(1, min(201, len(df_calc))):
+                # 500봉이내 골든크로스 체크
+                if len(df_calc) >= 501:
+                    for i in range(1, min(501, len(df_calc))):
                         prev_idx = -(i+1)
                         curr_idx = -i
 
@@ -1267,34 +1267,34 @@ class FifteenMinuteMegaStrategy:
                 else:
                     condition1_detail = "골든크로스 없음"
 
-                conditions.append(f"[A전략 조건1] 200봉이내 MA80-MA480 골든크로스 AND 현재 MA80>MA480 ({condition1_detail}): {condition1}")
+                conditions.append(f"[A전략 조건1] 500봉이내 MA80-MA480 골든크로스 AND 현재 MA80>MA480 ({condition1_detail}): {condition1}")
             except Exception as e:
                 conditions.append(f"[A전략 조건1] MA80-MA480 골든크로스 계산 실패: {e}")
                 condition1 = False
             
-            # 조건 2: 200봉이내 BB80-BB480 골든크로스
+            # 조건 2: 500봉이내 BB80-BB480 골든크로스
             condition2 = False
             condition2_detail = "골든크로스 없음"
-            
+
             try:
-                if len(df_calc) >= 201:
+                if len(df_calc) >= 501:
                     # BB80과 BB480 데이터 가져오기
                     bb80_data = df_calc.get('bb80_upper', df_calc.get('bb80', pd.Series()))
                     bb480_data = df_calc.get('bb480_upper', df_calc.get('bb480', pd.Series()))
-                    
-                    if len(bb80_data) >= 201 and len(bb480_data) >= 201:
-                        for i in range(1, min(201, len(bb80_data))):
+
+                    if len(bb80_data) >= 501 and len(bb480_data) >= 501:
+                        for i in range(1, min(501, len(bb80_data))):
                             prev_idx = -(i+1)
                             curr_idx = -i
-                            
+
                             if abs(prev_idx) > len(bb80_data) or abs(curr_idx) > len(bb80_data):
                                 continue
-                                
+
                             bb80_prev = bb80_data.iloc[prev_idx]
                             bb80_curr = bb80_data.iloc[curr_idx]
                             bb480_prev = bb480_data.iloc[prev_idx]
                             bb480_curr = bb480_data.iloc[curr_idx]
-                            
+
                             # BB480 값의 유효성 추가 체크
                             if (pd.notna(bb80_prev) and pd.notna(bb80_curr) and
                                 pd.notna(bb480_prev) and pd.notna(bb480_curr) and
@@ -1304,8 +1304,8 @@ class FifteenMinuteMegaStrategy:
                                 condition2 = True
                                 condition2_detail = f"{i}봉전 BB80-BB480 골든크로스"
                                 break
-                                
-                conditions.append(f"[A전략 조건2] 200봉이내 BB80-BB480 골든크로스 ({condition2_detail}): {condition2}")
+
+                conditions.append(f"[A전략 조건2] 500봉이내 BB80-BB480 골든크로스 ({condition2_detail}): {condition2}")
             except Exception as e:
                 conditions.append(f"[A전략 조건2] BB80-BB480 골든크로스 계산 실패: {e}")
                 condition2 = False
@@ -1415,26 +1415,26 @@ class FifteenMinuteMegaStrategy:
             if df_calc is None or len(df_calc) < 500:
                 return False, [f"[B전략] 15분봉 데이터 부족: {len(df_calc) if df_calc is not None else 0}봉 (500봉 필요)"]
             
-            # 조건 1: 200봉이내 MA80-MA480 골든크로스 AND MA80-MA480 이격도 1% 이상
+            # 조건 1: 500봉이내 MA80-MA480 골든크로스 AND MA80-MA480 이격도 1% 이상
             condition1 = False
             condition1_detail = "미충족"
-            
+
             try:
                 golden_cross_found = False
-                
-                if len(df_calc) >= 201:
-                    for i in range(min(200, len(df_calc) - 1)):
+
+                if len(df_calc) >= 501:
+                    for i in range(min(500, len(df_calc) - 1)):
                         curr_idx = -(i+1)
                         prev_idx = -(i+2)
-                        
+
                         if abs(prev_idx) > len(df_calc):
                             break
-                            
+
                         ma80_prev = df_calc['ma80'].iloc[prev_idx]
                         ma80_curr = df_calc['ma80'].iloc[curr_idx]
                         ma480_prev = df_calc['ma480'].iloc[prev_idx]
                         ma480_curr = df_calc['ma480'].iloc[curr_idx]
-                        
+
                         if (pd.notna(ma80_prev) and pd.notna(ma80_curr) and
                             pd.notna(ma480_prev) and pd.notna(ma480_curr) and
                             ma80_prev <= ma480_prev and ma80_curr > ma480_curr):
@@ -1457,33 +1457,33 @@ class FifteenMinuteMegaStrategy:
                         condition1_detail = "골든크로스=True, 이격도 계산 실패"
                 else:
                     condition1_detail = "골든크로스 없음"
-                                
-                conditions.append(f"[B전략 조건1] 200봉이내 MA80-MA480 골든크로스 AND 이격도 1%이상 ({condition1_detail}): {condition1}")
+
+                conditions.append(f"[B전략 조건1] 500봉이내 MA80-MA480 골든크로스 AND 이격도 1%이상 ({condition1_detail}): {condition1}")
             except Exception as e:
                 conditions.append(f"[B전략 조건1] MA80-MA480 골든크로스 계산 실패: {e}")
                 condition1 = False
-            
-            # 조건 2: BB골든크로스 (BB80상단-BB480상단)
+
+            # 조건 2: BB골든크로스 (BB80상단-BB480상단) 300봉이내
             condition2 = False
             condition2_detail = "BB골든크로스 없음"
-            
+
             try:
                 bb80_upper = df_calc.get('bb80_upper', pd.Series())
                 bb480_upper = df_calc['bb480_upper']
-                
-                if len(bb80_upper) >= 101 and len(bb480_upper) >= 101:
-                    for i in range(min(100, len(bb80_upper) - 1)):
+
+                if len(bb80_upper) >= 301 and len(bb480_upper) >= 301:
+                    for i in range(min(300, len(bb80_upper) - 1)):
                         curr_idx = -(i+1)
                         prev_idx = -(i+2)
-                        
+
                         if abs(prev_idx) > len(bb80_upper):
                             break
-                            
+
                         bb80_prev = bb80_upper.iloc[prev_idx]
                         bb80_curr = bb80_upper.iloc[curr_idx]
                         bb480_prev = bb480_upper.iloc[prev_idx]
                         bb480_curr = bb480_upper.iloc[curr_idx]
-                        
+
                         if (pd.notna(bb80_prev) and pd.notna(bb80_curr) and
                             pd.notna(bb480_prev) and pd.notna(bb480_curr) and
                             bb80_prev <= bb480_prev and bb80_curr > bb480_curr):
