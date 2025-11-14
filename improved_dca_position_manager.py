@@ -1049,6 +1049,19 @@ class ImprovedDCAPositionManager:
             position_value = entry_amount * leverage
             quantity = position_value / entry_price
 
+            # 최소 주문 금액 체크 (바이낸스 $5 요구사항)
+            min_notional_required = 5.0
+            current_notional_value = quantity * entry_price
+
+            if current_notional_value < min_notional_required:
+                # 최소 주문 금액을 충족하도록 수량 조정
+                quantity = min_notional_required / entry_price
+                adjusted_notional = quantity * entry_price
+                self.logger.info(f"💰 초기 진입 최소 주문 금액 조정: ${current_notional_value:.2f} → ${adjusted_notional:.2f}")
+                self.logger.info(f"📊 수량 조정: {position_value/entry_price:.6f} → {quantity:.6f}")
+                # position_value도 조정
+                position_value = adjusted_notional
+
             # 시장가 주문 Execute
             order_result = self._execute_market_order(symbol, quantity, "buy")
 
