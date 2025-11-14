@@ -259,7 +259,7 @@ class ImprovedDCAPositionManager:
             'half_profit_threshold': 0.10,       # 10% 절반 Exit 기준 (미사용)
             
             # 시스템 Settings
-            'max_total_positions': 10,      # 최대 보유 종목 수
+            'max_total_positions': 15,      # 최대 보유 종목 수
             'api_retry_count': 3,           # API 재시도 횟수
             'api_retry_delay': 1.0,         # API 재시도 지연 (초)
             'sync_interval': 15,            # 동기화 주기 (초)
