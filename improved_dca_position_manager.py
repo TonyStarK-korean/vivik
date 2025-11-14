@@ -246,7 +246,7 @@ class ImprovedDCAPositionManager:
             'pyramid_rsi_overbought': 70,             # RSI 70 이상시 금지
 
             # 🚫 손절선 고정 원칙 (초기 진입가 기준 절대 고정!)
-            'stop_loss_fixed': -0.03,          # 초기 진입가 기준 -3% 손절선 (불타기 후에도 고정)
+            'stop_loss_fixed': -0.10,          # 초기 진입가 기준 -10% 손절선 (불타기 후에도 고정)
             'stop_loss_never_change': True,    # 손절선 변경 금지 플래그
             # 주의: 평균가 기준 손절선 사용 금지! 리스크 초기 진입 손절폭 내로 제한
 
@@ -259,7 +259,7 @@ class ImprovedDCAPositionManager:
             'half_profit_threshold': 0.10,       # 10% 절반 Exit 기준 (미사용)
             
             # 시스템 Settings
-            'max_total_positions': 10,      # 최대 보유 종목 수
+            'max_total_positions': 15,      # 최대 보유 종목 수
             'api_retry_count': 3,           # API 재시도 횟수
             'api_retry_delay': 1.0,         # API 재시도 지연 (초)
             'sync_interval': 15,            # 동기화 주기 (초)
@@ -1049,6 +1049,19 @@ class ImprovedDCAPositionManager:
             position_value = entry_amount * leverage
             quantity = position_value / entry_price
 
+            # 최소 주문 금액 체크 (바이낸스 $5 요구사항)
+            min_notional_required = 5.0
+            current_notional_value = quantity * entry_price
+
+            if current_notional_value < min_notional_required:
+                # 최소 주문 금액을 충족하도록 수량 조정
+                quantity = min_notional_required / entry_price
+                adjusted_notional = quantity * entry_price
+                self.logger.info(f"💰 초기 진입 최소 주문 금액 조정: ${current_notional_value:.2f} → ${adjusted_notional:.2f}")
+                self.logger.info(f"📊 수량 조정: {position_value/entry_price:.6f} → {quantity:.6f}")
+                # position_value도 조정
+                position_value = adjusted_notional
+
             # 시장가 주문 Execute
             order_result = self._execute_market_order(symbol, quantity, "buy")
 
@@ -1295,11 +1308,11 @@ class ImprovedDCAPositionManager:
                             }
                         }
             
-            # 🔥 간소화된 시스템: 초기 진입가 기준 -3% 고정 손절
+            # 🔥 간소화된 시스템: 초기 진입가 기준 -10% 고정 손절
             if self.config.get('stop_loss_never_change', False):
                 # 초기 진입가 기준 수익률 계산
                 initial_profit = (current_price - position.initial_entry_price) / position.initial_entry_price
-                fixed_stop_loss = self.config.get('stop_loss_fixed', -0.03)
+                fixed_stop_loss = self.config.get('stop_loss_fixed', -0.10)
                 
                 if initial_profit <= fixed_stop_loss:
                     self.logger.critical(f"🚨 고정 손절 트리거: {position.symbol} (초기진입가 기준 {initial_profit*100:.2f}%)")
@@ -1794,10 +1807,10 @@ class ImprovedDCAPositionManager:
             self.config['pyramid_enabled'] = True
             
             # 4. 손절선 고정 설정
-            self.config['stop_loss_fixed'] = -0.03  # 초기 진입가 기준 -3%
+            self.config['stop_loss_fixed'] = -0.10  # 초기 진입가 기준 -10%
             self.config['stop_loss_never_change'] = True
-            
-            self.logger.info("🔥 DCA 시스템 간소화 완료: 불탄기만 사용, 손절선 고정(-3%)")
+
+            self.logger.info("🔥 DCA 시스템 간소화 완료: 불탄기만 사용, 손절선 고정(-10%)")
             
         except Exception as e:
             self.logger.error(f"DCA 시스템 간소화 실패: {e}")
@@ -1976,7 +1989,7 @@ class ImprovedDCAPositionManager:
    • 현재 수익: +{pyramid_signal['current_profit_pct']:.2f}%
 
 ⚠️ 리스크 관리:
-   • 손절: ${new_avg_price * 0.97:.6f} (-3%)
+   • 손절: ${new_avg_price * 0.90:.6f} (-10%)
    • 익절: Trailing Stop (2-3%)
 """
                     self.telegram_bot.send_message(message)
