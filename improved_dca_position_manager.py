@@ -246,7 +246,7 @@ class ImprovedDCAPositionManager:
             'pyramid_rsi_overbought': 70,             # RSI 70 이상시 금지
 
             # 🚫 손절선 고정 원칙 (초기 진입가 기준 절대 고정!)
-            'stop_loss_fixed': -0.03,          # 초기 진입가 기준 -3% 손절선 (불타기 후에도 고정)
+            'stop_loss_fixed': -0.10,          # 초기 진입가 기준 -10% 손절선 (불타기 후에도 고정)
             'stop_loss_never_change': True,    # 손절선 변경 금지 플래그
             # 주의: 평균가 기준 손절선 사용 금지! 리스크 초기 진입 손절폭 내로 제한
 
@@ -1295,11 +1295,11 @@ class ImprovedDCAPositionManager:
                             }
                         }
             
-            # 🔥 간소화된 시스템: 초기 진입가 기준 -3% 고정 손절
+            # 🔥 간소화된 시스템: 초기 진입가 기준 -10% 고정 손절
             if self.config.get('stop_loss_never_change', False):
                 # 초기 진입가 기준 수익률 계산
                 initial_profit = (current_price - position.initial_entry_price) / position.initial_entry_price
-                fixed_stop_loss = self.config.get('stop_loss_fixed', -0.03)
+                fixed_stop_loss = self.config.get('stop_loss_fixed', -0.10)
                 
                 if initial_profit <= fixed_stop_loss:
                     self.logger.critical(f"🚨 고정 손절 트리거: {position.symbol} (초기진입가 기준 {initial_profit*100:.2f}%)")
@@ -1794,10 +1794,10 @@ class ImprovedDCAPositionManager:
             self.config['pyramid_enabled'] = True
             
             # 4. 손절선 고정 설정
-            self.config['stop_loss_fixed'] = -0.03  # 초기 진입가 기준 -3%
+            self.config['stop_loss_fixed'] = -0.10  # 초기 진입가 기준 -10%
             self.config['stop_loss_never_change'] = True
-            
-            self.logger.info("🔥 DCA 시스템 간소화 완료: 불탄기만 사용, 손절선 고정(-3%)")
+
+            self.logger.info("🔥 DCA 시스템 간소화 완료: 불탄기만 사용, 손절선 고정(-10%)")
             
         except Exception as e:
             self.logger.error(f"DCA 시스템 간소화 실패: {e}")
@@ -1976,7 +1976,7 @@ class ImprovedDCAPositionManager:
    • 현재 수익: +{pyramid_signal['current_profit_pct']:.2f}%
 
 ⚠️ 리스크 관리:
-   • 손절: ${new_avg_price * 0.97:.6f} (-3%)
+   • 손절: ${new_avg_price * 0.90:.6f} (-10%)
    • 익절: Trailing Stop (2-3%)
 """
                     self.telegram_bot.send_message(message)
