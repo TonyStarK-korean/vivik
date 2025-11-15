@@ -65,11 +65,11 @@ class BinanceRateLimiter:
         self._last_429_time = None
         self._retry_after = 0
         
-        # 요청 기록 (1분 윈도우)
+        # 요청 기록 (1분 윈도우) - 더 엄격한 제한
         self._request_times = deque()
         self._weight_history = deque()
         self._current_weight = 0
-        self._max_weight_per_minute = 1200
+        self._max_weight_per_minute = 1000  # 1200 → 1000으로 더 보수적 설정
         
         # 백오프 관리
         self._consecutive_429s = 0
@@ -155,8 +155,8 @@ class BinanceRateLimiter:
             self._error_stats['429'] += 1
             
             # Retry-After 헤더에서 대기 Time 가져오기 (더 보수적)
-            retry_after = int(response_headers.get('retry-after', 120))  # 기본 2분 대기
-            self._retry_after = max(retry_after, 60)  # 최소 1분 대기
+            retry_after = int(response_headers.get('retry-after', 180))  # 기본 3분 대기
+            self._retry_after = max(retry_after, 120)  # 최소 2분 대기
             
             # 백오프 배율 증가 (더 공격적)
             self._backoff_multiplier = min(self._backoff_multiplier * 2.0, 20.0)
@@ -209,11 +209,11 @@ class BinanceRateLimiter:
                 self._retry_after = 0
                 self._consecutive_429s = max(0, self._consecutive_429s - 1)
         
-        # weight 기반 제한 Confirm (더 보수적으로 75%에서 제한)
+        # weight 기반 제한 Confirm (더 보수적으로 60%에서 제한)
         with self._lock:
             self._clean_old_requests()
-            if self._current_weight >= self._max_weight_per_minute * 0.75:  # 75% Reached시 제한
-                self.logger.warning(f"weight 한계 근접 (75%): {self._current_weight}/{self._max_weight_per_minute}")
+            if self._current_weight >= self._max_weight_per_minute * 0.60:  # 60% Reached시 제한
+                self.logger.warning(f"weight 한계 근접 (60%): {self._current_weight}/{self._max_weight_per_minute}")
                 return True
         
         return False
@@ -485,17 +485,18 @@ class RateLimitedExchange:
         return params
     
     def _get_cache_ttl(self, method_name: str) -> int:
-        """메서드별 Cache TTL Settings (더 공격적인 캐싱)"""
+        """메서드별 Cache TTL Settings (API 호출 최소화)"""
         ttl_mapping = {
-            'fetch_ticker': 3,      # 3초 (빠른 change)
-            'fetch_tickers': 5,     # 5초 
-            'fetch_ohlcv': 15,      # 15초 (OHLCV 데이터)
-            'fetch_balance': 30,    # 30초 (계좌 Info) - 더 자주 캐시
-            'fetch_positions': 15,  # 15초 (Position Info) - 더 자주 캐시
-            'fetch_orders': 60,     # 1분 (주문 내역)
-            'market': 300,          # 5분 (마켓 정보는 변경 빈도 낮음)
+            'fetch_ticker': 5,      # 5초 (빠른 change)
+            'fetch_tickers': 10,    # 10초 
+            'fetch_ohlcv': 30,      # 30초 (OHLCV 데이터)
+            'fetch_balance': 60,    # 1분 (계좌 Info) - 더 긴 캐시
+            'fetch_positions': 30,  # 30초 (Position Info) - 더 긴 캐시
+            'fetch_orders': 120,    # 2분 (주문 내역)
+            'fetch_open_orders': 60, # 1분 (열린 주문)
+            'market': 600,          # 10분 (마켓 정보는 변경 빈도 낮음)
         }
-        return ttl_mapping.get(method_name, 30)  # 기본 30초
+        return ttl_mapping.get(method_name, 45)  # 기본 45초
     
     def __getattr__(self, name):
         """Exchange 메서드에 대한 프록시"""

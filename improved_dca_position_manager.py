@@ -80,8 +80,9 @@ class PositionStage(Enum):
     CLOSING = "closing"          # Exit 중
 
 class ExitType(Enum):
-    """Exit Type - New 6가지 Exit 방식"""
+    """Exit Type - New 7가지 Exit 방식"""
     SUPERTREND_EXIT = "supertrend_exit"       # SuperTrend 전량Exit
+    BB80_BB600_AUTO_LIQUIDATION = "bb80_bb600_auto_liquidation" # BB80>BB600 복합기술적 전량청산
     BB600_PARTIAL_EXIT = "bb600_partial_exit" # BB600 50% 익절Exit
     BREAKEVEN_PROTECTION = "breakeven_protection" # 절반 하락 Exit
     WEAK_RISE_DUMP_PROTECTION = "weak_rise_dump_protection" # Approx상승후 급락 리스크 times피
@@ -133,8 +134,9 @@ class DCAPosition:
     last_cyclic_entry: str = ""  # 마지막 Cyclic trading Entry Time
     total_cyclic_profit: float = 0.0  # Cumulative Cyclic trading 수익
     
-    # New 6가지 Exit 방식 추적
+    # New 7가지 Exit 방식 추적
     max_profit_pct: float = 0.0  # 최대 Profit ratio 추적
+    bb80_bb600_exit_done: bool = False  # BB80>BB600 복합기술적 전량청산 Complete 여부
     bb600_exit_done: bool = False  # BB600 50% Exit Complete 여부
     breakeven_protection_active: bool = False  # Approx수익 보호 Active화 여부
     breakeven_exit_done: bool = False  # 본절보호Exit Complete 여부 (중복 방지용)
@@ -223,21 +225,21 @@ class ImprovedDCAPositionManager:
             'pyramid_enabled': True,      # 불타기 활성화
             'max_pyramid_count': 3,       # 최대 불타기 횟수 (3회)
 
-            # 1차 불타기: +0.5~1.0% 수익권 (방향 확정 + 거래량 유지)
+            # 1차 불타기: +0.5~1.0% 수익권 (방향 확정 + 거래량 유지) - 대폭 확대
             'pyramid_1_profit_min': 0.005,   # 최소 +0.5% 수익
             'pyramid_1_profit_max': 0.010,   # 최대 +1.0% 수익
-            'pyramid_1_weight': 0.007,       # 0.7배 비중 (역피라미드)
+            'pyramid_1_weight': 0.030,       # 3.0배 비중 (대폭 확대: 30% 노출)
             'pyramid_1_leverage': 10.0,      # 10배 레버리지
 
-            # 2차 불타기: +1.5~2.0% 수익권 (전고점 돌파 + 매수세 확인)
+            # 2차 불타기: +1.5~2.0% 수익권 (전고점 돌파 + 매수세 확인) - 대폭 확대
             'pyramid_2_profit_min': 0.015,   # 최소 +1.5% 수익
             'pyramid_2_profit_max': 0.020,   # 최대 +2.0% 수익
-            'pyramid_2_weight': 0.005,       # 0.5배 비중 (역피라미드)
+            'pyramid_2_weight': 0.025,       # 2.5배 비중 (대폭 확대: 25% 노출)
             'pyramid_2_leverage': 10.0,      # 10배 레버리지
 
-            # 3차 불타기: +3.0% 이상 (대세상승 + 볼밴확장 + 거래량급증)
+            # 3차 불타기: +3.0% 이상 (대세상승 + 볼밴확장 + 거래량급증) - 대폭 확대
             'pyramid_3_profit_min': 0.030,   # 최소 +3.0% 수익
-            'pyramid_3_weight': 0.003,       # 0.3배 비중 (최소 비중)
+            'pyramid_3_weight': 0.025,       # 2.5배 비중 (대폭 확대: 25% 노출)
             'pyramid_3_leverage': 10.0,      # 10배 레버리지
 
             # 🚫 불타기 금지 조건 (실전 기준)
@@ -245,10 +247,16 @@ class ImprovedDCAPositionManager:
             'pyramid_sideways_threshold': 0.002,      # 횡보 ±0.2% 감지시 금지
             'pyramid_rsi_overbought': 70,             # RSI 70 이상시 금지
 
-            # 🚫 손절선 고정 원칙 (초기 진입가 기준 절대 고정!)
-            'stop_loss_fixed': -0.10,          # 초기 진입가 기준 -10% 손절선 (불타기 후에도 고정)
-            'stop_loss_never_change': True,    # 손절선 변경 금지 플래그
-            # 주의: 평균가 기준 손절선 사용 금지! 리스크 초기 진입 손절폭 내로 제한
+            # 🎯 불타기 단계별 적응형 손절선 시스템 (본절 보호)
+            'adaptive_stop_loss_enabled': True,   # 적응형 손절선 활성화
+            'stop_loss_by_pyramid_stage': {
+                'initial': -0.10,       # 초기 진입: -10% (기존과 동일)
+                'pyramid_1': -0.08,     # 1차 불타기 후: -8% (본절 보호 강화)
+                'pyramid_2': -0.06,     # 2차 불타기 후: -6% (손실 최소화)
+                'pyramid_3': -0.05      # 3차 불타기 후: -5% (최대 보호)
+            },
+            'breakeven_protection_after_pyramid': True,  # 불타기 후 본절 보호 활성화
+            'pyramid_profit_threshold_for_breakeven': 0.02,  # 2% 수익 달성시 본절 보호 시작
 
             # 수익 Exit 전략 (Trailing Stop 방식)
             'trailing_stop_enabled': True,       # Trailing Stop 활성화
@@ -398,37 +406,102 @@ class ImprovedDCAPositionManager:
                 self.symbol_limits = {}
 
     def save_data(self):
-        """데이터 Save"""
-        with self.file_lock:
-            try:
+        """데이터 Save - JSON 직렬화 오류 해결 및 시스템 안정성 강화"""
+        try:
+            with self.file_lock:
                 # Backup Create
                 if os.path.exists(self.positions_file):
                     import shutil
-                    shutil.copy2(self.positions_file, self.backup_file)
+                    try:
+                        shutil.copy2(self.positions_file, self.backup_file)
+                    except Exception as backup_error:
+                        self.logger.warning(f"백업 생성 실패 (계속 진행): {backup_error}")
                 
-                # Position 데이터 Save
+                # Position 데이터 Save - numpy 타입 변환 추가
                 data = {}
                 for symbol, position in self.positions.items():
-                    # DCAEntry를 dict로 변환
-                    entries_dict = [asdict(entry) for entry in position.entries]
-                    pos_dict = asdict(position)
-                    pos_dict['entries'] = entries_dict
-                    data[symbol] = pos_dict
+                    try:
+                        # DCAEntry를 dict로 변환하고 numpy 타입 처리
+                        entries_dict = []
+                        for entry in position.entries:
+                            entry_dict = asdict(entry)
+                            entry_dict = self._sanitize_for_json(entry_dict)
+                            entries_dict.append(entry_dict)
+                        
+                        pos_dict = asdict(position)
+                        pos_dict = self._sanitize_for_json(pos_dict)
+                        pos_dict['entries'] = entries_dict
+                        data[symbol] = pos_dict
+                    except Exception as pos_error:
+                        self.logger.error(f"포지션 데이터 처리 실패 {symbol}: {pos_error}")
+                        # 해당 포지션은 스킵하고 계속 진행
+                        continue
                 
-                with open(self.positions_file, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
+                # JSON 파일 저장 (원자적 저장 - 임시파일 사용)
+                temp_file = self.positions_file + ".tmp"
+                try:
+                    with open(temp_file, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2, separators=(',', ': '))
+                    
+                    # 성공적으로 저장된 경우에만 원본 파일로 대체
+                    if os.path.exists(temp_file):
+                        import shutil
+                        shutil.move(temp_file, self.positions_file)
+                except Exception as json_error:
+                    self.logger.error(f"JSON 파일 저장 실패: {json_error}")
+                    # 임시파일 정리
+                    try:
+                        if os.path.exists(temp_file):
+                            os.remove(temp_file)
+                    except:
+                        pass
+                    raise json_error
                 
-                # 제한 데이터 Save
-                with open(self.limits_file, 'w', encoding='utf-8') as f:
-                    json.dump(self.symbol_limits, f, ensure_ascii=False, indent=2)
+                # 제한 데이터 Save (실패해도 시스템은 계속)
+                try:
+                    with open(self.limits_file, 'w', encoding='utf-8') as f:
+                        json.dump(self.symbol_limits, f, ensure_ascii=False, indent=2)
+                except Exception as limits_error:
+                    self.logger.warning(f"제한 데이터 저장 실패 (계속 진행): {limits_error}")
                 
                 self.logger.debug("Data save complete")
                 
-            except Exception as e:
-                self.logger.error(f"Data save failed: {e}")
+        except Exception as e:
+            self.logger.error(f"Data save failed: {e}")
+            # 추가 디버그 정보
+            self.logger.error(f"Error type: {type(e).__name__}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            
+            # 치명적 오류가 아닌 경우 시스템은 계속 실행
+            self.logger.warning("데이터 저장 실패했지만 시스템은 계속 실행합니다")
+
+    def _sanitize_for_json(self, obj):
+        """JSON 직렬화를 위해 numpy 타입을 Python 기본 타입으로 변환"""
+        if isinstance(obj, dict):
+            return {k: self._sanitize_for_json(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._sanitize_for_json(item) for item in obj]
+        elif hasattr(obj, 'item'):  # numpy scalar types
+            return obj.item()
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, (np.int8, np.int16, np.int32, np.int64)):
+            return int(obj)
+        elif isinstance(obj, (np.float16, np.float32, np.float64)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
 
     def sync_with_exchange(self, force_sync=False):
         """Trade소와 Sync - 핵심 count선"""
+        # 🚨 긴급 일시정지 체크
+        if os.path.exists("emergency_pause.flag"):
+            self.logger.warning("🚨 긴급 일시정지 감지 - DCA 동기화 중단")
+            return {'success': False, 'error': 'Emergency pause active'}
+            
         if not self.exchange:
             return {'success': False, 'error': 'Exchange not available'}
         
@@ -778,114 +851,45 @@ class ImprovedDCAPositionManager:
             return False
 
     def _create_initial_dca_limit_orders(self, position: DCAPosition, total_balance: float):
-        """최초 Entry시 DCA 1차, 2차 지정가 주문 자동 Create"""
+        """최초 Entry시 전량청산 지정가 주문 자동 생성 (하락 DCA 비활성화)"""
         try:
-            # 🔥 DCA 시스템이 비활성화된 경우 조용히 건너뛰기
-            if not self.config.get('dca_enabled', True):
-                self.logger.debug(f"🔕 DCA 시스템 비활성화됨: {position.symbol} DCA 주문 생성 건너뛰기")
-                return
-                
-            self.logger.info(f"🎯 {position.symbol} DCA limit order 자동 Create Starting...")
-            self.logger.info(f"   Entry가: ${position.initial_entry_price:.6f}")
-
-            # Current price 조times (DCA 주문 안전장치)
+            # 🔥 하락 DCA는 비활성화, 전량청산 주문만 생성
+            self.logger.info(f"🎯 {position.symbol} 전량청산 지정가 주문 자동 생성 중...")
+            self.logger.info(f"   진입가: ${position.initial_entry_price:.6f}")
+            
+            # 전량청산 주문 생성 (-10% 손절) - STOP-LIMIT 주문으로 변경
+            stop_loss_price = position.initial_entry_price * (1 + self.config.get('stop_loss_fixed', -0.10))
+            
+            # 🔧 STOP-LIMIT 주문으로 변경 (현재가 규칙 회피)
+            # 손절가에 도달하면 시장가로 전량 매도되도록 설정
             try:
-                ticker = self.exchange.fetch_ticker(position.symbol)
-                current_price = ticker['last']
-                self.logger.info(f"Current price check: {position.symbol} ${current_price:.6f}")
+                stop_order_result = self._execute_stop_loss_order(
+                    position.symbol,
+                    position.total_quantity,
+                    stop_loss_price
+                )
             except Exception as e:
-                self.logger.error(f"Current price 조times Failed {position.symbol}: {e}")
-                current_price = position.initial_entry_price  # Fallback
-
-            # 1차 DCA limit order (-3%)
-            first_dca_price = position.initial_entry_price * (1 + self.config['first_dca_trigger'])
-            first_dca_amount = total_balance * self.config['first_dca_weight']
-            first_dca_leverage = self.config['first_dca_leverage']
-            first_dca_quantity = (first_dca_amount * first_dca_leverage) / first_dca_price
-
-            # 🔒 안전장치: Current price가 DCA 가격보다 5% 이상 낮으면 주문 건너뜀 (극단적 하락 방지)
-            if current_price < first_dca_price * 0.95:  # DCA 가격의 95% 미만일 때만 Skip
-                self.logger.warning(f"⚠️ 1차 DCA order skipped: Current price(${current_price:.6f}) < DCA가격의 95%(${first_dca_price*0.95:.6f})")
-                first_order_result = {'success': False, 'error': 'Current price too far below DCA trigger'}
-            else:
-                first_order_result = self._execute_limit_order(
+                self.logger.warning(f"⚠️ 스톱로스 주문 실패, 지정가 주문으로 대체 시도: {e}")
+                # 대체 방안: 지정가 주문 (현재가 체크 무시)
+                stop_order_result = self._execute_limit_order_force(
                     position.symbol,
-                    first_dca_quantity,
-                    "buy",
-                    first_dca_price
+                    position.total_quantity,
+                    "sell",
+                    stop_loss_price
                 )
-
-            if first_order_result['success']:
-                first_dca_entry = DCAEntry(
-                    stage="first_dca",
-                    entry_price=first_dca_price,
-                    quantity=first_dca_quantity,
-                    notional=first_dca_amount * first_dca_leverage,
-                    leverage=first_dca_leverage,
-                    timestamp=get_korea_time().isoformat(),
-                    is_active=True,
-                    order_type="limit",
-                    order_id=first_order_result['order_id'],
-                    is_filled=False  # 지정가 주문은 미체결
-                )
-                position.entries.append(first_dca_entry)
-                self.logger.info(f"✅ 1차 DCA limit order placed: {position.symbol} @ ${first_dca_price:.4f} (ID: {first_order_result['order_id']})")
+            
+            if stop_order_result.get('success', False):
+                self.logger.info(f"✅ 전량청산 주문 생성 완료: {position.symbol} @ ${stop_loss_price:.6f}")
             else:
-                self.logger.error(f"❌ 1차 DCA limit order Failed: {position.symbol}")
-
-            # 2차 DCA limit order (-6%)
-            second_dca_price = position.initial_entry_price * (1 + self.config['second_dca_trigger'])
-            second_dca_amount = total_balance * self.config['second_dca_weight']
-            second_dca_leverage = self.config['second_dca_leverage']
-            second_dca_quantity = (second_dca_amount * second_dca_leverage) / second_dca_price
-
-            # 🔒 안전장치: Current price가 DCA 가격보다 5% 이상 낮으면 주문 건너뜀 (극단적 하락 방지)
-            if current_price < second_dca_price * 0.95:  # DCA 가격의 95% 미만일 때만 Skip
-                self.logger.warning(f"⚠️ 2차 DCA order skipped: Current price(${current_price:.6f}) < DCA가격의 95%(${second_dca_price*0.95:.6f})")
-                second_order_result = {'success': False, 'error': 'Current price too far below DCA trigger'}
-            else:
-                second_order_result = self._execute_limit_order(
-                    position.symbol,
-                    second_dca_quantity,
-                    "buy",
-                    second_dca_price
-                )
-
-            if second_order_result['success']:
-                second_dca_entry = DCAEntry(
-                    stage="second_dca",
-                    entry_price=second_dca_price,
-                    quantity=second_dca_quantity,
-                    notional=second_dca_amount * second_dca_leverage,
-                    leverage=second_dca_leverage,
-                    timestamp=get_korea_time().isoformat(),
-                    is_active=True,
-                    order_type="limit",
-                    order_id=second_order_result['order_id'],
-                    is_filled=False  # 지정가 주문은 미체결
-                )
-                position.entries.append(second_dca_entry)
-                self.logger.info(f"✅ 2차 DCA limit order placed: {position.symbol} @ ${second_dca_price:.4f} (ID: {second_order_result['order_id']})")
-            else:
-                self.logger.error(f"❌ 2차 DCA limit order Failed: {position.symbol}")
-
-            # 데이터 Save
+                self.logger.warning(f"⚠️ 전량청산 주문 실패: {position.symbol} - {stop_order_result.get('error', '알 수 없는 오류')}")
+            
+            # 하락 DCA 주문은 생성하지 않음 (비활성화)
+            self.logger.info(f"ℹ️ 하락 DCA 주문 생성 건너뜀: 불타기 시스템만 활성화됨")
+            
+            # 데이터 저장
             self.save_data()
-
-            # 텔레그램 Notification Remove (메인 전략의 통합 Notification에 DCA Info 포함됨)
-            # if self.telegram_bot and (first_order_result['success'] or second_order_result['success']):
-            #     orders_info = []
-            #     if first_order_result['success']:
-            #         orders_info.append(f"1차: ${first_dca_price:.4f} (-3%)")
-            #     if second_order_result['success']:
-            #         orders_info.append(f"2차: ${second_dca_price:.4f} (-6%)")
-            #
-            #     message = (f"📋 DCA limit order 자동 Register\n"
-            #               f"Symbol: {position.symbol}\n"
-            #               f"{chr(10).join(orders_info)}")
-            #     self.telegram_bot.send_message(message)
-
-            self.logger.info(f"🎉 {position.symbol} DCA limit order 자동 Create Complete")
+            
+            self.logger.info(f"🎉 {position.symbol} 포지션 등록 및 전량청산 주문 완료")
 
         except Exception as e:
             self.logger.error(f"DCA limit order 자동 Create Failed {position.symbol}: {e}")
@@ -1164,14 +1168,20 @@ class ImprovedDCAPositionManager:
                 }
             
             # 2. New Exit 시스템 Confirm (2-5순위 Exit)
-            new_exit_signal = self.check_new_exit_conditions(symbol, current_price)
-            if new_exit_signal:
-                success = self.execute_new_exit(symbol, new_exit_signal)
-                return {
-                    'trigger_activated': True,
-                    'action': 'new_exit_executed' if success else 'new_exit_failed',
-                    'trigger_info': new_exit_signal
-                }
+            try:
+                new_exit_signal = self.check_new_exit_conditions(symbol, current_price)
+                if new_exit_signal:
+                    success = self.execute_new_exit(symbol, new_exit_signal)
+                    return {
+                        'trigger_activated': True,
+                        'action': 'new_exit_executed' if success else 'new_exit_failed',
+                        'trigger_info': new_exit_signal
+                    }
+            except Exception as e:
+                self.logger.error(f"New Exit 시스템 처리 중 오류 {symbol}: {e}")
+                # 오류가 발생해도 시스템이 멈추지 않도록 계속 진행
+                import traceback
+                self.logger.error(f"New Exit 오류 상세: {traceback.format_exc()}")
             
             # 3. Legacy DCA 트리거 Confirm (캐싱 적용)
             try:
@@ -1214,6 +1224,12 @@ class ImprovedDCAPositionManager:
             profit_protection_result = self.check_profit_protection_exit(position, current_price)
             if profit_protection_result:
                 return profit_protection_result
+
+            # 1.7. 불타기 후 본절 보호 시스템 (브레이크이븐 보호)
+            if self.config.get('breakeven_protection_after_pyramid', False):
+                breakeven_result = self._check_breakeven_protection_after_pyramid(position, current_price, profit_pct)
+                if breakeven_result:
+                    return breakeven_result
             
             # 2. 기존 수익 Exit Confirm
             profit_exit_result = self._check_profit_exit_triggers(position, current_price, profit_pct)
@@ -1308,26 +1324,32 @@ class ImprovedDCAPositionManager:
                             }
                         }
             
-            # 🔥 간소화된 시스템: 초기 진입가 기준 -10% 고정 손절
-            if self.config.get('stop_loss_never_change', False):
+            # 🎯 적응형 손절선 시스템 (불타기 단계별 차등 적용)
+            if self.config.get('adaptive_stop_loss_enabled', False):
+                # 현재 불타기 단계에 따른 손절율 결정
+                pyramid_stage = position.pyramid_stage or 'initial'
+                stop_loss_rates = self.config.get('stop_loss_by_pyramid_stage', {})
+                adaptive_stop_loss = stop_loss_rates.get(pyramid_stage, -0.10)
+                
                 # 초기 진입가 기준 수익률 계산
                 initial_profit = (current_price - position.initial_entry_price) / position.initial_entry_price
-                fixed_stop_loss = self.config.get('stop_loss_fixed', -0.10)
                 
-                if initial_profit <= fixed_stop_loss:
-                    self.logger.critical(f"🚨 고정 손절 트리거: {position.symbol} (초기진입가 기준 {initial_profit*100:.2f}%)")
+                if initial_profit <= adaptive_stop_loss:
+                    self.logger.critical(f"🚨 적응형 손절 트리거: {position.symbol} ({pyramid_stage} 단계 → {adaptive_stop_loss*100:.1f}%)")
                     self.logger.critical(f"   초기 진입가: ${position.initial_entry_price:.6f} → 현재가: ${current_price:.6f}")
+                    self.logger.critical(f"   현재 수익률: {initial_profit*100:.2f}% (손절선: {adaptive_stop_loss*100:.1f}%)")
                     
                     # 즉시 전량 Exit
-                    success = self._execute_emergency_exit(position, current_price, "fixed_stop_loss")
+                    success = self._execute_emergency_exit(position, current_price, "adaptive_stop_loss")
                     
                     return {
                         'trigger_activated': True,
-                        'action': 'fixed_stop_loss_executed' if success else 'fixed_stop_loss_failed',
+                        'action': 'adaptive_stop_loss_executed' if success else 'adaptive_stop_loss_failed',
                         'trigger_info': {
-                            'type': '고정 손절 Exit (초기진입가 기준)',
-                            'stop_loss_pct': fixed_stop_loss * 100,
+                            'type': f'적응형 손절 Exit ({pyramid_stage} 단계)',
+                            'stop_loss_pct': adaptive_stop_loss * 100,
                             'profit_pct': initial_profit * 100,
+                            'pyramid_stage': pyramid_stage,
                             'initial_entry_price': position.initial_entry_price,
                             'current_price': current_price
                         }
@@ -1416,11 +1438,10 @@ class ImprovedDCAPositionManager:
     def _check_pyramid_1_conditions(self, position: DCAPosition, current_price: float, current_profit: float) -> Optional[Dict[str, Any]]:
         """🎯 1차 불타기: +0.5~1.0% 수익권 (방향 확정 + 거래량 유지)"""
         try:
-            # 1. 수익률 범위 체크: +0.5% ~ +1.0%
+            # 1. 수익률 조건 체크: +0.5% 이상 (상한선 제거)
             profit_min = self.config.get('pyramid_1_profit_min', 0.005)
-            profit_max = self.config.get('pyramid_1_profit_max', 0.010)
             
-            if not (profit_min <= current_profit <= profit_max):
+            if current_profit < profit_min:
                 return None
 
             # 2. 📈 실전 시그널 조건 체크
@@ -1446,11 +1467,10 @@ class ImprovedDCAPositionManager:
     def _check_pyramid_2_conditions(self, position: DCAPosition, current_price: float, current_profit: float) -> Optional[Dict[str, Any]]:
         """🎯 2차 불타기: +1.5~2.0% 수익권 (전고점 돌파 + 매수세 확인)"""
         try:
-            # 1. 수익률 범위 체크: +1.5% ~ +2.0%
+            # 1. 수익률 조건 체크: +1.5% 이상 (상한선 제거)
             profit_min = self.config.get('pyramid_2_profit_min', 0.015)
-            profit_max = self.config.get('pyramid_2_profit_max', 0.020)
             
-            if not (profit_min <= current_profit <= profit_max):
+            if current_profit < profit_min:
                 return None
 
             # 2. 📈 실전 시그널 조건 체크 (전고점 돌파 포함)
@@ -1512,10 +1532,9 @@ class ImprovedDCAPositionManager:
                 # 여기서는 플래그만 반환
                 pass
                 
-            # 2. 횡보 구간 감지 (±0.2% 내 움직임시 금지)
-            sideways_threshold = self.config.get('pyramid_sideways_threshold', 0.002)
-            if abs((current_price - position.pyramid_highest_price) / position.pyramid_highest_price) < sideways_threshold:
-                return True  # 금지
+            # 2. 횡보 구간 감지 조건 제거 (불타기 기회 확대)
+            # 기존 ±0.2% 조건이 너무 엄격해서 불타기 기회를 차단함
+            # 불타기는 상승 추세에서 실행되므로 횡보 구간 감지 불필요
                 
             # 3. 초기 진입가 손실 상황시 금지
             if current_profit < -0.01:  # -1% 이하 손실시 금지
@@ -1533,15 +1552,15 @@ class ImprovedDCAPositionManager:
         조건: 현재가 > 이전 고점 && 거래량 > 이전봉 대비 1.5배 && 볼밴 상단 확장 중
         """
         try:
-            # 1. 현재가 > 이전 고점 (상승 추세 확인)
-            price_breakout = current_price > position.pyramid_highest_price * 0.998  # 0.2% 여유 둔
+            # 1. 현재가 > 이전 고점 (상승 추세 확인) - 조건 완화
+            price_breakout = current_price > position.pyramid_highest_price * 0.99  # 1% 여유
             
             # 2. 거래량 증가 신호 (간소화된 체크)
             # TODO: 실제 거래량 API 체크 구현 필요
             volume_surge = True  # 임시: 거래량 확인 로직 필요
             
-            # 3. 가격 상승 모멘텀 체크 (현재가가 최고점에 충분히 가까운지)
-            momentum_ok = current_price > position.pyramid_highest_price * 0.995  # 0.5% 이내
+            # 3. 가격 상승 모멘텀 체크 (조건 완화)
+            momentum_ok = current_price > position.pyramid_highest_price * 0.98  # 2% 이내
             
             # 4. 시간 간격 체크 (너무 빠른 연속 불타기 방지)
             time_ok = True
@@ -1792,25 +1811,25 @@ class ImprovedDCAPositionManager:
             print(f"콘솔 출력 오류: {e}")
     
     def _apply_simplified_system(self):
-        """🔥 DCA 시스템 간소화 - 불타기만 사용"""
+        """🔥 DCA 시스템 재활성화 - 하락시 추가진입 비활성화, 불타기만 활성화"""
         try:
-            # 1. DCA 관련 설정 비활성화
-            self.config['dca_enabled'] = False
-            self.config['first_dca_enabled'] = False
-            self.config['second_dca_enabled'] = False
+            # 1. DCA 시스템은 활성화하되 하락시 추가진입만 비활성화
+            self.config['dca_enabled'] = True  # DCA 시스템은 활성화하되
+            self.config['first_dca_enabled'] = False   # 하락시 1차 추가진입 비활성화
+            self.config['second_dca_enabled'] = False  # 하락시 2차 추가진입 비활성화
             
-            # 2. DCA 트리거 비활성화 (실행되지 않도록 극심하게 설정)
-            self.config['first_dca_trigger'] = -999.0   # 절대 실행 안됨
-            self.config['second_dca_trigger'] = -999.0  # 절대 실행 안됨
+            # 2. DCA 트리거 비활성화 (하락시 추가진입 방지)
+            self.config['first_dca_trigger'] = -999.0   # -3% 하락 추가진입 비활성화
+            self.config['second_dca_trigger'] = -999.0  # -6% 하락 추가진입 비활성화
             
-            # 3. 불탄기 시스템 활성화 확인
+            # 3. 불타기 시스템 활성화 (상승시 추가진입)
             self.config['pyramid_enabled'] = True
             
             # 4. 손절선 고정 설정
             self.config['stop_loss_fixed'] = -0.10  # 초기 진입가 기준 -10%
             self.config['stop_loss_never_change'] = True
 
-            self.logger.info("🔥 DCA 시스템 간소화 완료: 불탄기만 사용, 손절선 고정(-10%)")
+            self.logger.info("🔥 DCA 시스템 재활성화 완료: 하락 DCA 비활성화, 불타기만 활성화, 손절선 고정(-10%)")
             
         except Exception as e:
             self.logger.error(f"DCA 시스템 간소화 실패: {e}")
@@ -1839,10 +1858,15 @@ class ImprovedDCAPositionManager:
             stage = pyramid_signal['stage']
             current_price = pyramid_signal['current_price']
             weight = pyramid_signal['weight']
+            highest_price = pyramid_signal['highest_price']
+            
+            # 상승률과 눌림률 계산
+            rise_pct = ((highest_price - position.initial_entry_price) / position.initial_entry_price) * 100
+            pullback_pct = ((highest_price - current_price) / highest_price) * 100
 
             self.logger.info(f"🔥 [{symbol}] {stage} 불타기 실행!")
-            self.logger.info(f"   최고점: ${pyramid_signal['highest_price']:.6f} (+{pyramid_signal['rise_pct']:.2f}%)")
-            self.logger.info(f"   현재가: ${current_price:.6f} (눌림: -{pyramid_signal['pullback_pct']:.2f}%)")
+            self.logger.info(f"   최고점: ${highest_price:.6f} (+{rise_pct:.2f}%)")
+            self.logger.info(f"   현재가: ${current_price:.6f} (눌림: -{pullback_pct:.2f}%)")
             self.logger.info(f"   현재 수익: +{pyramid_signal['current_profit_pct']:.2f}%")
 
             # 잔고 조회 (캐싱 적용)
@@ -1934,6 +1958,14 @@ class ImprovedDCAPositionManager:
                     timestamp=get_korea_time().isoformat()
                 )
                 position.entries.append(entry)
+
+                # 🔥 불타기 후 적응형 손절선 업데이트
+                stop_update_result = self._update_stop_loss_after_pyramid(position, stage)
+                if stop_update_result.get('success'):
+                    self.logger.critical(f"🛡️ 손절선 보호 강화: {stage} 불타기 후 → {stop_update_result['new_stop_loss_pct']:.1f}%")
+                    self.logger.critical(f"   신규 손절가: ${stop_update_result['new_stop_price']:.6f}")
+                else:
+                    self.logger.warning(f"⚠️ 손절선 업데이트 실패: {stop_update_result.get('error', '알 수 없는 오류')}")
 
                 # 저장
                 self.save_data()
@@ -2537,8 +2569,12 @@ class ImprovedDCAPositionManager:
             reason_lower = reason.lower()
             max_profit_pct = getattr(position, 'max_profit_pct', 0) * 100  # 최대 Profit ratio을 %로 변환
             
+            # BB80>BB600 복합기술적 전량청산 (최우선)
+            if 'bb80_bb600_auto_liquidation' in reason_lower:
+                return "🚨", "BB80>BB600 복합기술적 전량청산 Complete", f"복합 기술적 조건 충족으로 자동 전량청산"
+            
             # SuperTrend 전량Exit
-            if 'supertrend' in reason_lower:
+            elif 'supertrend' in reason_lower:
                 return "📈", "SuperTrend 전량Exit Complete", f"트렌드 반전 감지 Exit"
             
             # 본절 보호Exit (breakeven_protection)
@@ -3018,6 +3054,298 @@ class ImprovedDCAPositionManager:
         except Exception as e:
             self.logger.error(f"지정가 주문 Execute Failed: {symbol} {side} {quantity} @ ${price:.4f} - {e}")
             return {'success': False, 'error': str(e)}
+
+    def _execute_stop_loss_order(self, symbol: str, quantity: float, stop_price: float) -> Dict[str, Any]:
+        """스톱로스 주문 Execute (다중 방식 시도로 안정성 확보)"""
+        try:
+            if not self.exchange:
+                return {'success': False, 'error': 'Exchange not available'}
+            
+            # 방법 1: STOP_MARKET 주문 시도 (권장)
+            try:
+                order = self.exchange.create_order(
+                    symbol=symbol,
+                    type='STOP_MARKET',
+                    side='sell',
+                    amount=abs(quantity),
+                    params={'stopPrice': stop_price}
+                )
+                
+                if order and order.get('id'):
+                    self.logger.info(f"✅ STOP_MARKET 주문 성공: {symbol} SELL {quantity} @ STOP ${stop_price:.6f} - ID: {order['id']}")
+                    return {
+                        'success': True,
+                        'order_id': order['id'],
+                        'order_type': 'stop_market',
+                        'stop_price': stop_price,
+                        'status': order.get('status', 'open')
+                    }
+            except Exception as e1:
+                self.logger.warning(f"⚠️ STOP_MARKET 실패, STOP_LOSS_LIMIT 시도: {e1}")
+                
+                # 방법 2: STOP_LOSS_LIMIT 주문 시도
+                try:
+                    # 스톱가보다 약간 낮은 리밋가 설정 (슬리피지 고려)
+                    limit_price = stop_price * 0.995  # 0.5% 슬리피지 허용
+                    
+                    order = self.exchange.create_order(
+                        symbol=symbol,
+                        type='STOP_LOSS_LIMIT',
+                        side='sell',
+                        amount=abs(quantity),
+                        price=limit_price,
+                        params={'stopPrice': stop_price}
+                    )
+                    
+                    if order and order.get('id'):
+                        self.logger.info(f"✅ STOP_LOSS_LIMIT 주문 성공: {symbol} SELL {quantity} @ STOP ${stop_price:.6f}/LIMIT ${limit_price:.6f}")
+                        return {
+                            'success': True,
+                            'order_id': order['id'],
+                            'order_type': 'stop_loss_limit',
+                            'stop_price': stop_price,
+                            'limit_price': limit_price,
+                            'status': order.get('status', 'open')
+                        }
+                except Exception as e2:
+                    self.logger.warning(f"⚠️ STOP_LOSS_LIMIT도 실패, 조건부 주문 시도: {e2}")
+                    
+                    # 방법 3: 조건부 주문 시도
+                    try:
+                        order = self.exchange.create_order(
+                            symbol=symbol,
+                            type='LIMIT',
+                            side='sell',
+                            amount=abs(quantity),
+                            price=stop_price,
+                            params={
+                                'timeInForce': 'GTC',  # Good Till Cancelled
+                                'postOnly': False      # 즉시 실행 허용
+                            }
+                        )
+                        
+                        if order and order.get('id'):
+                            self.logger.info(f"✅ 조건부 LIMIT 주문 성공: {symbol} SELL {quantity} @ ${stop_price:.6f}")
+                            return {
+                                'success': True,
+                                'order_id': order['id'],
+                                'order_type': 'limit_fallback',
+                                'stop_price': stop_price,
+                                'status': order.get('status', 'open')
+                            }
+                    except Exception as e3:
+                        self.logger.error(f"❌ 모든 손절 주문 방식 실패: STOP_MARKET({e1}), STOP_LOSS_LIMIT({e2}), LIMIT({e3})")
+                        return {'success': False, 'error': f'All stop loss methods failed: {str(e3)}'}
+                
+        except Exception as e:
+            self.logger.error(f"스톱로스 주문 시스템 오류: {symbol} SELL {quantity} @ STOP ${stop_price:.6f} - {e}")
+            return {'success': False, 'error': f'Stop loss system error: {str(e)}'}
+
+    def _update_stop_loss_after_pyramid(self, position: DCAPosition, pyramid_stage: str) -> Dict[str, Any]:
+        """불타기 후 적응형 손절선 업데이트 (본절 보호 강화)"""
+        try:
+            if not self.config.get('adaptive_stop_loss_enabled', False):
+                return {'success': False, 'error': 'Adaptive stop loss disabled'}
+            
+            symbol = position.symbol
+            
+            # 불타기 단계별 새로운 손절율 결정
+            stop_loss_rates = self.config.get('stop_loss_by_pyramid_stage', {})
+            new_stop_loss_rate = stop_loss_rates.get(pyramid_stage, -0.10)
+            
+            # 새로운 손절가 계산 (초기 진입가 기준)
+            new_stop_price = position.initial_entry_price * (1 + new_stop_loss_rate)
+            
+            self.logger.info(f"🛡️ [{symbol}] 불타기 후 손절선 업데이트 중...")
+            self.logger.info(f"   불타기 단계: {pyramid_stage}")
+            self.logger.info(f"   기존 손절율: -10.0% → 신규: {new_stop_loss_rate*100:.1f}%")
+            self.logger.info(f"   신규 손절가: ${new_stop_price:.6f}")
+            
+            # 기존 손절 주문 취소
+            cancel_result = self._cancel_existing_stop_orders(symbol)
+            if not cancel_result.get('success'):
+                self.logger.warning(f"⚠️ 기존 손절 주문 취소 실패: {cancel_result.get('error', '알 수 없는 오류')}")
+            
+            # 새로운 손절 주문 생성
+            new_stop_order = self._execute_stop_loss_order(
+                symbol=symbol,
+                quantity=position.total_quantity,
+                stop_price=new_stop_price
+            )
+            
+            if new_stop_order.get('success'):
+                self.logger.critical(f"✅ 적응형 손절선 업데이트 완료!")
+                self.logger.critical(f"   신규 주문 ID: {new_stop_order['order_id']}")
+                self.logger.critical(f"   보호 강화: {pyramid_stage} → {new_stop_loss_rate*100:.1f}% 손절")
+                
+                return {
+                    'success': True,
+                    'new_stop_loss_pct': new_stop_loss_rate * 100,
+                    'new_stop_price': new_stop_price,
+                    'order_id': new_stop_order['order_id'],
+                    'pyramid_stage': pyramid_stage
+                }
+            else:
+                self.logger.error(f"❌ 신규 손절 주문 생성 실패: {new_stop_order.get('error', '알 수 없는 오류')}")
+                return {
+                    'success': False, 
+                    'error': f'Failed to create new stop order: {new_stop_order.get("error", "Unknown error")}'
+                }
+                
+        except Exception as e:
+            self.logger.error(f"적응형 손절선 업데이트 시스템 오류: {symbol} - {e}")
+            return {'success': False, 'error': f'Adaptive stop loss system error: {str(e)}'}
+
+    def _cancel_existing_stop_orders(self, symbol: str) -> Dict[str, Any]:
+        """기존 손절 주문 취소"""
+        try:
+            if not self.exchange:
+                return {'success': False, 'error': 'Exchange not available'}
+            
+            # 미체결 주문 조회
+            open_orders = self.exchange.fetch_open_orders(symbol)
+            
+            cancelled_count = 0
+            for order in open_orders:
+                try:
+                    order_type = order.get('type', '').lower()
+                    order_side = order.get('side', '')
+                    order_id = order.get('id')
+                    
+                    # 손절 주문인지 확인
+                    if (order_side == 'sell' and 
+                        ('stop' in order_type or 'conditional' in order_type.lower())):
+                        
+                        # 주문 취소
+                        cancel_result = self.exchange.cancel_order(order_id, symbol)
+                        if cancel_result:
+                            self.logger.info(f"   ✅ 기존 손절 주문 취소: {order_id} ({order_type})")
+                            cancelled_count += 1
+                        else:
+                            self.logger.warning(f"   ⚠️ 주문 취소 실패: {order_id}")
+                            
+                except Exception as e:
+                    self.logger.warning(f"   주문 취소 중 오류: {order.get('id', 'unknown')} - {e}")
+                    continue
+            
+            return {
+                'success': True,
+                'cancelled_count': cancelled_count,
+                'message': f'{cancelled_count}개 손절 주문 취소됨'
+            }
+            
+        except Exception as e:
+            self.logger.error(f"기존 손절 주문 취소 시스템 오류: {symbol} - {e}")
+            return {'success': False, 'error': f'Cancel existing stop orders error: {str(e)}'}
+
+    def _check_breakeven_protection_after_pyramid(self, position: DCAPosition, current_price: float, profit_pct: float) -> Optional[Dict[str, Any]]:
+        """불타기 후 본절 보호 시스템 (브레이크이븐 보호)"""
+        try:
+            # 불타기가 실행된 포지션만 대상
+            if position.pyramid_count == 0:
+                return None
+            
+            pyramid_stage = position.pyramid_stage or 'initial'
+            if pyramid_stage == 'initial':
+                return None
+            
+            # 설정된 수익 임계값 이상 달성했는지 확인
+            profit_threshold = self.config.get('pyramid_profit_threshold_for_breakeven', 0.02)  # 2%
+            
+            # 한 번이라도 임계값 이상 달성했는지 추적
+            if not hasattr(position, 'breakeven_protection_triggered'):
+                if profit_pct >= profit_threshold:
+                    position.breakeven_protection_triggered = True
+                    position.breakeven_highest_profit = profit_pct
+                    self.logger.info(f"🛡️ [{position.symbol}] 본절 보호 시스템 활성화! (수익률: {profit_pct*100:.2f}%)")
+                    return None
+                else:
+                    return None
+            
+            # 보호 시스템이 활성화된 경우, 최고 수익 추적
+            if hasattr(position, 'breakeven_highest_profit'):
+                if profit_pct > position.breakeven_highest_profit:
+                    position.breakeven_highest_profit = profit_pct
+            
+            # 본절(0%) 이하로 하락하면 보호 청산
+            if profit_pct <= 0.0:
+                self.logger.critical(f"🚨 본절 보호 트리거: {position.symbol}")
+                self.logger.critical(f"   불타기 단계: {pyramid_stage}")
+                self.logger.critical(f"   최고 수익: {getattr(position, 'breakeven_highest_profit', 0)*100:.2f}%")
+                self.logger.critical(f"   현재 수익: {profit_pct*100:.2f}% → 본절 보호 청산")
+                
+                # 즉시 전량 청산
+                success = self._execute_emergency_exit(position, current_price, "breakeven_protection")
+                
+                return {
+                    'trigger_activated': True,
+                    'action': 'breakeven_protection_executed' if success else 'breakeven_protection_failed',
+                    'trigger_info': {
+                        'type': '본절 보호 청산',
+                        'pyramid_stage': pyramid_stage,
+                        'highest_profit_pct': getattr(position, 'breakeven_highest_profit', 0) * 100,
+                        'current_profit_pct': profit_pct * 100,
+                        'current_price': current_price,
+                        'average_price': position.average_price
+                    }
+                }
+            
+            # -1% 이하로 하락하면 강력 보호 청산 (손실 확대 방지)
+            elif profit_pct <= -0.01:
+                self.logger.critical(f"🚨 강력 본절 보호 트리거: {position.symbol} (손실 확대 방지)")
+                self.logger.critical(f"   현재 손실: {profit_pct*100:.2f}% → 즉시 청산")
+                
+                success = self._execute_emergency_exit(position, current_price, "strong_breakeven_protection")
+                
+                return {
+                    'trigger_activated': True,
+                    'action': 'strong_breakeven_protection_executed' if success else 'strong_breakeven_protection_failed',
+                    'trigger_info': {
+                        'type': '강력 본절 보호 청산 (손실 확대 방지)',
+                        'pyramid_stage': pyramid_stage,
+                        'current_profit_pct': profit_pct * 100,
+                        'current_price': current_price,
+                        'average_price': position.average_price
+                    }
+                }
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"본절 보호 시스템 오류: {position.symbol} - {e}")
+            return None
+
+    def _execute_limit_order_force(self, symbol: str, quantity: float, side: str, price: float) -> Dict[str, Any]:
+        """강제 지정가 주문 Execute (현재가 체크 무시)"""
+        try:
+            if not self.exchange:
+                return {'success': False, 'error': 'Exchange not available'}
+            
+            # 현재가 체크 없이 바로 지정가 주문 실행
+            order = self.exchange.create_limit_order(
+                symbol=symbol,
+                side=side,
+                amount=abs(quantity),
+                price=price
+            )
+            
+            if order and order.get('id'):
+                self.logger.info(f"강제 지정가 주문 Success: {symbol} {side} {quantity} @ ${price:.4f} - ID: {order['id']}")
+                return {
+                    'success': True,
+                    'order_id': order['id'],
+                    'filled': order.get('filled', 0),
+                    'remaining': order.get('remaining', quantity),
+                    'price': price,
+                    'order_type': 'limit_force',
+                    'status': order.get('status', 'open')
+                }
+            else:
+                return {'success': False, 'error': 'Force limit order creation failed'}
+                
+        except Exception as e:
+            self.logger.error(f"강제 지정가 Order 실행 실패: {symbol} {side} {quantity} @ ${price:.4f} - {e}")
+            return {'success': False, 'error': f'Force limit order execution failed: {str(e)}'}
 
     def _cancel_pending_orders(self, symbol: str) -> Dict[str, Any]:
         """해당 Symbol의 미체결 지정가 주문 Cancel - Rate Limit 대응 강화"""
@@ -3843,7 +4171,9 @@ class ImprovedDCAPositionManager:
                         'max_profit_pct': position.max_profit_pct * 100,
                         'current_profit_pct': current_profit_pct * 100,
                         'supertrend_signal': f"상승({prev_trend}) → 하락({current_trend})",
-                        'trigger_info': "5minute candles SuperTrend(10-3) Exit시그널 (Profit ratio 무관)"
+                        'trigger_info': "5minute candles SuperTrend(10-3) Exit시그널 (Profit ratio 무관)",
+                        'current_price': current_price,  # Missing key 추가
+                        'timeframe': '5m'  # Missing key 추가 (5분봉 기준)
                     }
             
             return None
@@ -4003,6 +4333,136 @@ class ImprovedDCAPositionManager:
             self.logger.error(f"Trailing 스탑 체크 Failed {symbol}: {e}")
             return None
     
+    def check_bb80_bb600_manual_liquidation_signal(self, symbol: str, current_price: float, position: DCAPosition) -> Optional[Dict[str, Any]]:
+        """1순위: BB80 > BB600 복합 기술적 분석 자동 전량청산
+        
+        조건: 원금수익률 ≥ 10% AND 15분봉상 BB80 상단 > BB600 상단 AND BB 차이 ≥ 1.0% 
+        and 1분봉상 ma5>bb80상단선>ma20>bb200상단선 
+        and 1분봉상 (2회 or 3회) 연속 음봉 
+        and ((시가>bb80상한선 and 종가<bb80상한선) or (ma5-bb80상단선 이격도 0.5%이내))
+        
+        결과: 전량 자동청산
+        """
+        try:
+            # 중복 실행 방지
+            if hasattr(position, 'bb80_bb600_exit_done') and position.bb80_bb600_exit_done:
+                return None
+            
+            # 조건 1: 원금수익률 >= 10%
+            current_profit_pct = (current_price - position.average_price) / position.average_price
+            if current_profit_pct < 0.10:
+                return None
+                
+            # 15분봉 데이터 조회 (BB80, BB600 계산용)
+            ohlcv_15m = self.exchange.fetch_ohlcv(symbol, '15m', limit=650)
+            df_15m = pd.DataFrame(ohlcv_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            
+            if len(df_15m) < 600:
+                return None
+                
+            # 15분봉 BB80, BB600 계산
+            bb80_upper_15m = df_15m['close'].rolling(window=80).mean() + (df_15m['close'].rolling(window=80).std() * 2)
+            bb600_upper_15m = df_15m['close'].rolling(window=600).mean() + (df_15m['close'].rolling(window=600).std() * 2)
+            
+            latest_15m = df_15m.iloc[-1]
+            bb80_upper_15m_latest = bb80_upper_15m.iloc[-1]
+            bb600_upper_15m_latest = bb600_upper_15m.iloc[-1]
+            
+            # 조건 2: 15분봉상 BB80 상단 > BB600 상단
+            if bb80_upper_15m_latest <= bb600_upper_15m_latest:
+                return None
+                
+            # 조건 3: BB 차이 >= 1.0%
+            bb_diff_pct = ((bb80_upper_15m_latest - bb600_upper_15m_latest) / bb600_upper_15m_latest) * 100
+            if bb_diff_pct < 1.0:
+                return None
+                
+            # 1분봉 데이터 조회 (세부 기술적 분석용)
+            ohlcv_1m = self.exchange.fetch_ohlcv(symbol, '1m', limit=250)
+            df_1m = pd.DataFrame(ohlcv_1m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            
+            if len(df_1m) < 200:
+                return None
+                
+            # 1분봉 지표 계산
+            df_1m['ma5'] = df_1m['close'].rolling(window=5).mean()
+            df_1m['ma20'] = df_1m['close'].rolling(window=20).mean()
+            
+            bb80_upper_1m = df_1m['close'].rolling(window=80).mean() + (df_1m['close'].rolling(window=80).std() * 2)
+            bb200_upper_1m = df_1m['close'].rolling(window=200).mean() + (df_1m['close'].rolling(window=200).std() * 2)
+            
+            df_1m['bb80_upper'] = bb80_upper_1m
+            df_1m['bb200_upper'] = bb200_upper_1m
+            
+            latest_1m = df_1m.iloc[-1]
+            
+            # 조건 4: 1분봉상 ma5>bb80상단선>ma20>bb200상단선
+            cond4 = (latest_1m['ma5'] > latest_1m['bb80_upper'] > 
+                    latest_1m['ma20'] > latest_1m['bb200_upper'])
+            if not cond4:
+                return None
+                
+            # 조건 5: 1분봉상 (2회 or 3회) 연속 음봉 (최근부터 역순으로 확인)
+            recent_3_candles = df_1m.tail(3)
+            consecutive_red = 0
+            for i in range(len(recent_3_candles) - 1, -1, -1):  # 최근부터 역순
+                candle = recent_3_candles.iloc[i]
+                if candle['close'] < candle['open']:  # 음봉
+                    consecutive_red += 1
+                else:
+                    break  # 연속 중단
+                    
+            cond5 = consecutive_red >= 2  # 2회 이상 연속 음봉
+            if not cond5:
+                return None
+                
+            # 조건 6: (시가>bb80상한선 and 종가<bb80상한선) or (ma5-bb80상단선 이격도 0.5%이내)
+            cond6a = (latest_1m['open'] > latest_1m['bb80_upper'] and 
+                     latest_1m['close'] < latest_1m['bb80_upper'])
+            
+            ma5_bb80_gap_pct = abs((latest_1m['ma5'] - latest_1m['bb80_upper']) / latest_1m['bb80_upper']) * 100
+            cond6b = ma5_bb80_gap_pct <= 0.5
+            
+            cond6 = cond6a or cond6b
+            if not cond6:
+                return None
+                
+            # 모든 조건 충족 - 전량 자동청산 신호
+            self.logger.warning(f"🚨 BB80>BB600 복합기술적 전량청산 신호: {symbol}")
+            self.logger.warning(f"   원금수익률: {current_profit_pct*100:.2f}%")
+            self.logger.warning(f"   15분봉 BB80상단: {bb80_upper_15m_latest:.6f}")
+            self.logger.warning(f"   15분봉 BB600상단: {bb600_upper_15m_latest:.6f}")
+            self.logger.warning(f"   BB차이: {bb_diff_pct:.2f}%")
+            self.logger.warning(f"   연속음봉: {consecutive_red}회")
+            self.logger.warning(f"   MA5-BB80상단 이격도: {ma5_bb80_gap_pct:.3f}%")
+            
+            # 텔레그램 알림
+            if self.telegram_bot:
+                clean_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
+                message = (f"🚨 [BB80>BB600 복합기술적 전량청산] {clean_symbol}\n"
+                         f"원금수익률: {current_profit_pct*100:.2f}%\n"
+                         f"15분봉 BB차이: {bb_diff_pct:.2f}%\n"
+                         f"연속음봉: {consecutive_red}회\n"
+                         f"MA5-BB80 이격도: {ma5_bb80_gap_pct:.3f}%\n"
+                         f"🔥 전량 자동청산 실행")
+                self.telegram_bot.send_message(message)
+                
+            return {
+                'exit_type': ExitType.BB80_BB600_AUTO_LIQUIDATION.value,
+                'exit_ratio': 1.0,  # 전량 청산
+                'current_profit_pct': current_profit_pct * 100,
+                'current_price': current_price,
+                'bb_diff_pct': bb_diff_pct,
+                'consecutive_red_candles': consecutive_red,
+                'ma5_bb80_gap_pct': ma5_bb80_gap_pct,
+                'trigger_info': f"BB80>BB600 복합기술적 조건 충족 (수익률: {current_profit_pct*100:.2f}%)",
+                'timeframe': '15m+1m_analysis'
+            }
+            
+        except Exception as e:
+            self.logger.error(f"BB80>BB600 복합기술적 분석 실패 {symbol}: {e}")
+            return None
+
     def check_breakeven_protection_exit(self, symbol: str, current_price: float, position: DCAPosition) -> Optional[Dict[str, Any]]:
         """3. 본절Exit: Profit ratio별 차등 Exit (3%~5%: 손실전환전, 5%~10%: 절반하락시)"""
         try:
@@ -4109,7 +4569,9 @@ class ImprovedDCAPositionManager:
                         'max_profit_pct': position.max_profit_pct * 100,
                         'current_profit_pct': current_profit_pct * 100,
                         'secured_profit': current_profit_pct * 100,  # 실제 확보 P&L
-                        'trigger_info': trigger_reason
+                        'trigger_info': trigger_reason,
+                        'current_price': current_price,  # Missing key 추가
+                        'timeframe': '3m'  # Missing key 추가 (기본값)
                     }
             
             return None
@@ -4179,7 +4641,9 @@ class ImprovedDCAPositionManager:
                     'max_profit_pct': position.max_profit_pct * 100,
                     'current_profit_pct': current_profit_pct * 100,
                     'supertrend_signal_position': signal_position,
-                    'trigger_info': f"Approx상승후 급락 리스크 times피 (최대{position.max_profit_pct*100:.1f}% → {current_profit_pct*100:.1f}%, SuperTrend(10-2) 5봉이내 Exit신호)"
+                    'trigger_info': f"Approx상승후 급락 리스크 times피 (최대{position.max_profit_pct*100:.1f}% → {current_profit_pct*100:.1f}%, SuperTrend(10-2) 5봉이내 Exit신호)",
+                    'current_price': current_price,  # Missing key 추가
+                    'timeframe': '5m'  # Missing key 추가 (5분봉 기준)
                 }
             
             return None
@@ -4310,7 +4774,8 @@ class ImprovedDCAPositionManager:
                     'current_profit_pct': current_profit_pct * 100,
                     'current_price': current_price,
                     'conditions_met': conditions_met,
-                    'trigger_info': f"15분봉 BB/MA 피크 포착 (수익률: {current_profit_pct*100:.2f}%)"
+                    'trigger_info': f"15분봉 BB/MA 피크 포착 (수익률: {current_profit_pct*100:.2f}%)",
+                    'timeframe': '15m'  # Missing key 추가 (15분봉 기준)
                 }
             else:
                 # 디버그용: 조건 미충족 사유 로깅 (너무 자주 출력되지 않도록 조절)
@@ -4366,6 +4831,21 @@ class ImprovedDCAPositionManager:
                     'trigger_info': supertrend_exit.get('trigger_info', 'SuperTrend 청산'),
                     'signal_strength': 'HIGH'
                 })
+
+            # 1.5. BB80 > BB600 자동 전량청산 체크 (1순위 조건)
+            try:
+                bb80_bb600_exit = self.check_bb80_bb600_manual_liquidation_signal(symbol, current_price, position)
+                if bb80_bb600_exit:
+                    exit_signals.append({
+                        'priority': 1.5,  # SuperTrend 다음 최우선
+                        'exit_type': bb80_bb600_exit['exit_type'],
+                        'exit_ratio': bb80_bb600_exit['exit_ratio'],
+                        'current_profit_pct': bb80_bb600_exit.get('current_profit_pct', current_profit_pct * 100),
+                        'trigger_info': bb80_bb600_exit.get('trigger_info', 'BB80>BB600 복합기술적 전량청산'),
+                        'signal_strength': 'CRITICAL'
+                    })
+            except Exception:
+                pass
 
             # 3. 15분봉 BB/MA 피크 전량익절 체크
             try:
@@ -4452,10 +4932,39 @@ class ImprovedDCAPositionManager:
             self.logger.error(f"청산 신호 종합 체크 실패 {symbol}: {e}")
             return None
     
-    def check_new_exit_conditions(self, symbol: str, current_price: float) -> bool:
-        """New Exit 조건 Confirm (미구현)"""
-        # TODO: New Exit 조건들 구현
-        return False
+    def check_new_exit_conditions(self, symbol: str, current_price: float) -> Optional[Dict[str, Any]]:
+        """New Exit 조건 Confirm - 4가지 exit 방식 체크"""
+        try:
+            if symbol not in self.positions:
+                return None
+            
+            position = self.positions[symbol]
+            
+            # 1. BB600 Exit 체크 (2순위)
+            bb600_exit = self.check_bb600_exit_signal(symbol, current_price, position)
+            if bb600_exit:
+                return bb600_exit
+            
+            # 2. 본절 보호 Exit 체크 (1.5순위)  
+            breakeven_exit = self.check_breakeven_protection_exit(symbol, current_price, position)
+            if breakeven_exit:
+                return breakeven_exit
+            
+            # 3. 약상승후 급락 리스크 회피 체크 (5순위)
+            weak_rise_dump_exit = self.check_weak_rise_dump_protection_exit(symbol, current_price, position)
+            if weak_rise_dump_exit:
+                return weak_rise_dump_exit
+            
+            # 4. 피크 수익 Exit 체크 (6순위)
+            peak_profit_exit = self.check_peak_profit_exit_signal(symbol, current_price, position)
+            if peak_profit_exit:
+                return peak_profit_exit
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"New Exit 조건 확인 실패 {symbol}: {e}")
+            return None
     
     def execute_new_exit(self, symbol: str, exit_signal: Dict[str, Any]) -> dict:
         """New Exit 방식 Execute"""
@@ -4491,7 +5000,9 @@ class ImprovedDCAPositionManager:
                     silent = False
             else:
                 # 부분 Exit (50%)
-                result = self._execute_partial_exit(position, exit_signal['current_price'], exit_ratio, f"new_exit_{exit_type}")
+                # current_price 안전하게 가져오기 (Missing key 문제 해결)
+                current_price = exit_signal.get('current_price', position.average_price)
+                result = self._execute_partial_exit(position, current_price, exit_ratio, f"new_exit_{exit_type}")
                 if isinstance(result, dict):
                     success = result.get('success', False)
                     silent = result.get('silent', False)
@@ -4520,6 +5031,14 @@ class ImprovedDCAPositionManager:
             
             if exit_type == ExitType.SUPERTREND_EXIT.value:
                 position.supertrend_exit_done = True
+            elif exit_type == ExitType.BB80_BB600_AUTO_LIQUIDATION.value:
+                # BB80>BB600 복합기술적 전량청산은 전량 Exit이므로 모든 Exit Complete Process
+                position.bb80_bb600_exit_done = True
+                position.supertrend_exit_done = True
+                position.bb600_exit_done = True
+                position.weak_rise_dump_exit_done = True
+                position.breakeven_exit_done = True
+                position.peak_profit_exit_done = True
             elif exit_type == ExitType.BB600_PARTIAL_EXIT.value:
                 position.bb600_exit_done = True
                 # Trailing 스탑이 Active화된 경우 Maintain
@@ -4594,23 +5113,41 @@ class ImprovedDCAPositionManager:
                     emoji = "💙"
                     title = "Approx수익 보호Exit"
                     
-                details = (f"최대수익: {exit_signal['max_profit_pct']:.1f}%\n"
-                          f"확보수익: {exit_signal['secured_profit']:.1f}%\n"
+                max_profit_pct = exit_signal.get('max_profit_pct', exit_signal.get('max_profit', 0))
+                secured_profit = exit_signal.get('secured_profit', exit_signal.get('current_profit_pct', 0))
+                details = (f"최대수익: {max_profit_pct:.1f}%\n"
+                          f"확보수익: {secured_profit:.1f}%\n"
                           f"Exit량: 100% (전량)")
             
             elif exit_type == ExitType.WEAK_RISE_DUMP_PROTECTION.value:
                 emoji = "🚨"
                 title = "Approx상승후 급락 리스크 times피"
-                details = (f"최대수익: {exit_signal['max_profit_pct']:.1f}%\n"
-                          f"Current수익: {exit_signal['current_profit_pct']:.1f}%\n"
+                max_profit_pct = exit_signal.get('max_profit_pct', exit_signal.get('max_profit', 0))
+                current_profit_pct = exit_signal.get('current_profit_pct', 0)
+                details = (f"최대수익: {max_profit_pct:.1f}%\n"
+                          f"Current수익: {current_profit_pct:.1f}%\n"
                           f"SuperTrend(10-2): 5봉이내 Exit신호\n"
+                          f"Exit량: 100% (전량)")
+
+            elif exit_type == ExitType.BB80_BB600_AUTO_LIQUIDATION.value:
+                emoji = "🚨"
+                title = "BB80>BB600 복합기술적 전량청산"
+                bb_diff_pct = exit_signal.get('bb_diff_pct', 0)
+                consecutive_red = exit_signal.get('consecutive_red_candles', 0)
+                ma5_bb80_gap = exit_signal.get('ma5_bb80_gap_pct', 0)
+                current_profit_pct = exit_signal.get('current_profit_pct', 0)
+                details = (f"수익률: {current_profit_pct:.2f}%\n"
+                          f"15분봉 BB80>BB600 차이: {bb_diff_pct:.2f}%\n"
+                          f"1분봉 연속음봉: {consecutive_red}회\n"
+                          f"MA5-BB80상단 이격도: {ma5_bb80_gap:.3f}%\n"
                           f"Exit량: 100% (전량)")
 
             elif exit_type == ExitType.PEAK_PROFIT_EXIT.value:
                 emoji = "🎯"
                 title = "15분봉 BB/MA 피크 전량익절"
                 conditions_str = "\n".join([f"   ✅ {cond}" for cond in exit_signal.get('conditions_met', [])])
-                details = (f"수익률: {exit_signal['current_profit_pct']:.2f}%\n"
+                current_profit_pct = exit_signal.get('current_profit_pct', 0)
+                details = (f"수익률: {current_profit_pct:.2f}%\n"
                           f"충족조건 (5개):\n{conditions_str}\n"
                           f"Exit량: 100% (전량)")
 
